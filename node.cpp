@@ -60,6 +60,110 @@ private:
 		cout << "Sent update-FIN message: " << update << endl;
 
 	}
+	
+	//BACKBONE NODES   starting the gossip thread.
+	void start_gossip_thread() {
+		thread([this]() {
+			int heartbeat_counter = 0;
+			map<int, pair<string, int>> previous_peers;
+
+			while (true) {
+				this_thread::sleep_for(chrono::seconds(5)); // Gossip every 5 seconds
+				cout << "Known peers" << endl;
+				print_backbone_nodes();
+				bool list_changed = false;
+
+				// Lock to access peers safely
+				{
+					lock_guard<mutex> lock(clock_mutex);
+					for (const auto& peer : peers) {
+						// Skip querying self
+						if (peer.second.second == port) continue;
+
+						// Query peer for its known peers
+						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
+
+						// Merge received peers with local peers
+						for (const auto& received_peer : received_peers) {
+							bool found = false;
+							for (const auto& existing_peer : peers) {
+								if (existing_peer.second.first == received_peer.first &&
+								                existing_peer.second.second == received_peer.second) {
+									found = true;
+									break;
+								}
+							}
+							if (!found) {
+								int new_peer_id = total_peers++;
+								peers[new_peer_id] = {received_peer.first, received_peer.second};
+								list_changed = true;
+							}
+						}
+					}
+				}
+
+				// Update heartbeat counter
+				if (list_changed) {
+					heartbeat_counter = 0;
+					cout << "Peer list updated! Known peers: " << peers.size() << endl;
+				} else {
+					heartbeat_counter++;
+					cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
+				}
+			}
+		}).detach();
+	}
+
+
+	//BACKBONE NODES gossig query
+	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
+		vector<pair<string, int>> peer_list;
+		int client_socket;
+		struct sockaddr_in server_address;
+
+		// Create socket
+		if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+			cerr << "Socket creation failed for peer query\n";
+			return peer_list;
+		}
+
+		server_address.sin_family = AF_INET;
+		server_address.sin_port = htons(peer_port);
+
+		// Convert IP address to binary form
+		if (inet_pton(AF_INET, peer_ip.c_str(), &server_address.sin_addr) <= 0) {
+			cerr << "Invalid peer IP address\n";
+			close(client_socket);
+			return peer_list;
+		}
+
+		// Connect to peer
+		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+			cerr << "Connection to peer failed\n";
+			close(client_socket);
+			return peer_list;
+		}
+
+		// Send GOSSIP request
+		string request = "GOSSIP "+ to_string(*my_port);
+		send(client_socket, request.c_str(), request.length(), 0);
+		cout << "Sent " << request.c_str() << endl;
+		// Receive peer list
+		char buffer[1024] = {0};
+		ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
+		if (bytes_received > 0) {
+			buffer[bytes_received] = '\0'; // Null-terminate the received message
+			istringstream iss(buffer);
+			string peer_ip;
+			int peer_port;
+			while (iss >> peer_ip >> peer_port) {
+				peer_list.push_back({peer_ip, peer_port});
+			}
+		}
+
+		close(client_socket);
+		return peer_list;
+	}
 
 
 	//BACKBONE nodes
@@ -78,7 +182,7 @@ private:
 	}
 
 	//BACKBONE nodes
-	int handle_message(string buf)
+	int handle_message(int client_socket, string buf, const string& sender_ip)
 	{
 		istringstream iss(buf);
 		string word;
@@ -115,6 +219,42 @@ private:
 			} else if(word == "UPDATEFIN") {
 				cout << "received UPDATEFIN" << endl;
 				return (-1);
+			} else if (word == "GOSSIP") {
+
+				cout << "Received GOSSIP request from " << sender_ip << ":" << endl;
+				bool found = false;
+				string sender_p;
+				iss >> sender_p;
+				int sender_port = stoi(sender_p);
+
+				{ 
+					lock_guard<mutex> lock(clock_mutex);
+					for(const auto& peer: peers){
+						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
+							found=true;
+							break;
+						}	
+					}
+					//add to peer list if not in the list.
+					if(!found) {
+						int new_peer_id = total_peers++;
+						peers[new_peer_id]= {sender_ip, sender_port};
+						cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
+					}
+				}
+				
+				string peer_list;
+				// Create a string representation of the peer list
+				
+				{
+					lock_guard<mutex> lock(clock_mutex);
+					for (const auto& peer : peers) {
+						peer_list += peer.second.first + " " + to_string(peer.second.second) + " ";
+					}
+				}
+				// Send the peer list to the requesting node
+				cout << "Sending this: " << peer_list.c_str() << endl;
+				send(client_socket, peer_list.c_str(), peer_list.length(), 0);
 			}
 		}
 		return 0;
@@ -167,15 +307,15 @@ private:
 			cout << "Sent registration message: " << my_reg << endl;
 			break;
 		}
-		
+
 		while(true) {
-		// Wait for the reply from the bootstrap node ( with a list of 2 peers.)
+			// Wait for the reply from the bootstrap node ( with a list of 2 peers.)
 			char buffer[1024] = {0};
 			ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
 			if (bytes_received > 0) {
 				buffer[bytes_received] = '\0'; // Null-terminate the received message
 				cout << "Received reply from bootstrap node: " << buffer << endl;
-				if(handle_message(buffer) == -1)
+				if(handle_message(client_socket, buffer, "0") == -1)
 					break;
 			} else {
 				cerr << "Failed to receive reply from bootstrap node or connection closed\n";
@@ -201,6 +341,17 @@ private:
 		cout << "handleConnection() client_socket: " << client_socket << endl;
 
 		char buffer[1024] = {0};
+		struct sockaddr_in peer_address;
+		socklen_t peer_address_len = sizeof(peer_address);
+		
+		if(getpeername(client_socket, (struct sockaddr *)&peer_address, &peer_address_len) == -1) {
+			cout << "failed to get peer information" << endl;
+			close(client_socket);
+			return;
+		}
+		string sender_ip = inet_ntoa(peer_address.sin_addr);
+
+
 		while (true) {
 			memset(buffer, 0, sizeof(buffer));
 			int bytes_read = read(client_socket, buffer, 1024);
@@ -227,7 +378,7 @@ private:
 					break;
 				}
 			} else { // peer nodes logic
-				handle_message(buffer);
+				handle_message(client_socket, buffer,sender_ip);
 			}
 		}
 		close(client_socket); // Ensure the socket is closed properly
@@ -248,8 +399,10 @@ public:
 		cout << "test start()" << endl;
 
 
-		if(*my_port != bootstrap_port)
+		if(*my_port != bootstrap_port) {
 			register_to_bootstrap();
+			start_gossip_thread();//start the gossip thread.
+		}
 
 		struct sockaddr_in address;
 		int addrlen = sizeof(address);
