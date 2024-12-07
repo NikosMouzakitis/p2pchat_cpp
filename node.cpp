@@ -27,6 +27,7 @@ private:
 	int server_fd;
 	std::map <int, int> vector_clock; //vector clock used for ordering transactions.
 	std::mutex  clock_mutex;  //mutex to hold when modifying vector clock.
+	bool list_changed = false; //gossip list for peers
 
 	// BOOTSTRAP NODE operation
 	// sends to the connected node 2 other peers data(ip:port)
@@ -69,9 +70,8 @@ private:
 
 			while (true) {
 				this_thread::sleep_for(chrono::seconds(5)); // Gossip every 5 seconds
-				cout << "Known peers" << endl;
+				cout << "Known peers before gossip" << endl;
 				print_backbone_nodes();
-				bool list_changed = false;
 
 				// Lock to access peers safely
 				{
@@ -105,11 +105,15 @@ private:
 				// Update heartbeat counter
 				if (list_changed) {
 					heartbeat_counter = 0;
-					cout << "Peer list updated! Known peers: " << peers.size() << endl;
+					cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
+					list_changed = false; //set false again.
 				} else {
 					heartbeat_counter++;
 					cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
 				}
+				cout << "Known peers after gossip" << endl;
+				print_backbone_nodes();
+
 			}
 		}).detach();
 	}
@@ -240,6 +244,7 @@ private:
 						int new_peer_id = total_peers++;
 						peers[new_peer_id]= {sender_ip, sender_port};
 						cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
+						list_changed = true;
 					}
 				}
 				
