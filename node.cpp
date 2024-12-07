@@ -52,7 +52,7 @@ private:
 			}
 		}
 		//finish update msg
-		string update="UPDATE FIN";
+		string update="UPDATEFIN";
 		ssize_t bytes_sent = send(client_socket, update.c_str(), update.length(), 0);
 		if (bytes_sent == -1) {
 			cerr << "Failed to send update-fin message to the connected node\n";
@@ -78,7 +78,7 @@ private:
 	}
 
 	//BACKBONE nodes
-	void handle_message(string buf)
+	int handle_message(string buf)
 	{
 		istringstream iss(buf);
 		string word;
@@ -112,8 +112,12 @@ private:
 				}
 				printVectorClock();
 
+			} else if(word == "UPDATEFIN") {
+				cout << "received UPDATEFIN" << endl;
+				return (-1);
 			}
 		}
+		return 0;
 	}
 
 	// BACKBONE node operation
@@ -171,7 +175,8 @@ private:
 			if (bytes_received > 0) {
 				buffer[bytes_received] = '\0'; // Null-terminate the received message
 				cout << "Received reply from bootstrap node: " << buffer << endl;
-				handle_message(buffer);
+				if(handle_message(buffer) == -1)
+					break;
 			} else {
 				cerr << "Failed to receive reply from bootstrap node or connection closed\n";
 			}
