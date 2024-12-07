@@ -65,11 +65,13 @@ private:
 	//BACKBONE NODES   starting the gossip thread.
 	void start_gossip_thread() {
 		thread([this]() {
+
+			this_thread::sleep_for(chrono::seconds(3)); // Gossip every 5 seconds
 			int heartbeat_counter = 0;
 			map<int, pair<string, int>> previous_peers;
 
 			while (true) {
-				this_thread::sleep_for(chrono::seconds(5)); // Gossip every 5 seconds
+				this_thread::sleep_for(chrono::seconds(1)); // Gossip every 5 seconds
 				cout << "Known peers before gossip" << endl;
 				print_backbone_nodes();
 
