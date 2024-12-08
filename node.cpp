@@ -54,11 +54,11 @@ private:
 	void sendMessageToPeers(const string& content, int sender_port, map<int, int>& sender_clock) {
 		{
 			lock_guard<mutex> lock(clock_mutex);
-			sender_clock[sender_port]++;  // Increment sender's vector clock for the port
+			vector_clock[sender_port]++; //increment sender's clock.
 		}
 
-		string message = "MESSAGE "+ to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(sender_clock);
-
+		string message = "MESSAGE "+ to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(vector_clock);
+		cout << "sending : -----> " << message << endl;
 		// Send the message to all peers except itself
 		for (const auto& peer : peers) {
 			if (peer.second.second != sender_port) { // Exclude self
@@ -114,6 +114,8 @@ private:
 
 	void enqueueMessage(PeerMessage newMessage) {
 		// Place the message in the queue
+		cout << "enq. n m" << endl;
+
 		messageQueue.push(newMessage);
 
 		// Sort messages in the queue based on vector clock
@@ -152,7 +154,7 @@ private:
 				isGreater = true;  // If clock1 doesn't have this port, clock2 is greater
 			}
 		}
-
+		
 		return isGreater && !isLesser;
 	}
 
@@ -352,7 +354,7 @@ private:
 		string word;
 
 		while (iss >> word) {
-		///	cout << "WORD" << " " << word << endl;
+			///	cout << "WORD" << " " << word << endl;
 			////Update message arrived from Bootstrap node.
 			if (word == "UPDATE") {
 				cout << "Received UPDATE msg from Bootstrap node" << endl;
@@ -433,43 +435,63 @@ private:
 				string port_str;
 				string content;
 				string clock_str;
-				
-			//	cout << "ASDASDASDASDASDA"<<endl;
+
+				//	cout << "ASDASDASDASDASDA"<<endl;
 				// Extract the port, message content, and vector clock
 				iss >> port_str;
 				getline(iss, content, '~');  // Read until '~' as the message content
 				getline(iss, clock_str);  // Read the rest as the clock
-			//	cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
+				//	cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
 				int sender_port = stoi(port_str);
 				map<int, int> received_clock;
-
-				// Parse the vector clock (this assumes it's a space-separated "port:time" format)
+				// Parse the vector clock (this assumes it's a comma-separated "port:time" format)
 				istringstream clock_stream(clock_str);
 				string clock_entry;
-				while (getline(clock_stream, clock_entry, ' ')) {
+
+				while (getline(clock_stream, clock_entry, ',')) {
+					// Skip any empty entries caused by trailing commas
+					if (clock_entry.empty()) {
+						continue;
+					}
 					size_t colon_pos = clock_entry.find(':');
 					if (colon_pos != string::npos) {
-						int peer_port = stoi(clock_entry.substr(0, colon_pos));
-						int time = stoi(clock_entry.substr(colon_pos + 1));
-						received_clock[peer_port] = time;
+						try {
+							int peer_port = stoi(clock_entry.substr(0, colon_pos)); // Extract the port
+							int time = stoi(clock_entry.substr(colon_pos + 1)); // Extract the time
+							received_clock[peer_port] = time; // Store in the map
+						} catch (const std::invalid_argument& e) {
+							std::cerr << "Invalid argument in vector clock: " << clock_entry << std::endl;
+						} catch (const std::out_of_range& e) {
+							std::cerr << "Out of range error in vector clock: " << clock_entry << std::endl;
+						}
 					}
 				}
 
+				// Debugging: Print the received vector clock
 				std::cout << "Received Vector Clock: { ";
-				for (const auto& entry : vector_clock) {
+				for (const auto& entry : received_clock) {
 					std::cout << entry.first << ": " << entry.second << ", ";
 				}
 				std::cout << "}" << std::endl;
-	
+
+
 				// Create the PeerMessage object with content, vector clock, sender IP, and sender port
 				PeerMessage receivedMessage(content, received_clock, sender_ip, sender_port);
 
 				// Enqueue the message to be processed later
 				enqueueMessage(receivedMessage);
 				printMessageQueue();
+				cout << sender_port + " says: " + content << endl;	
+
+				/*
+
 				// Process the message queue in order of vector clocks
 				while (!messageQueue.empty()) {
 					PeerMessage msg = messageQueue.front();
+					cout << msg.content << endl;	
+
+
+					
 					// Check causal order
 					if (compareVectorClocks(msg.vector_clock, vector_clock)) {
 						// Update the receiver's vector clock for the sender
@@ -487,7 +509,10 @@ private:
 						// Stop processing if the front message isn't ready
 						break;
 					}
+
+					
 				}
+				*/
 			}
 
 		}
@@ -592,7 +617,7 @@ private:
 			if (bytes_read <= 0) {
 				break;
 			}
-			cout << "Received: " << buffer << endl;
+	//		cout << "Received: " << buffer << endl;
 
 			if (*my_port == bootstrap_port) { // Bootstrap node logic
 				string register_cmd = "REGISTER";
