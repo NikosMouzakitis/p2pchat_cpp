@@ -164,7 +164,7 @@ private:
 
 				// Lock to access peers safely
 				{
-					lock_guard<mutex> lock(peer_list_mutex);
+				//	lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 						// Skip querying self
 						if (peer.second.second == port) continue;
@@ -208,7 +208,7 @@ private:
 	}
 
 
-	//BACKBONE NODES gossig query
+	//BACKBONE NODES gossiping query
 	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
 		vector<pair<string, int>> peer_list;
 		int client_socket;
@@ -241,6 +241,7 @@ private:
 		string request = "GOSSIP "+ to_string(*my_port);
 		send(client_socket, request.c_str(), request.length(), 0);
 		cout << "Sent " << request.c_str() << endl;
+/*****************************************************/ //problem to receive here.
 		// Receive peer list
 		char buffer[1024] = {0};
 		ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
@@ -323,7 +324,7 @@ private:
 				cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
 				{
-					lock_guard<mutex> lock(peer_list_mutex);
+				//	lock_guard<mutex> lock(peer_list_mutex);
 					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
@@ -618,7 +619,16 @@ int main(int argc, char *argv[])
 
 
 	Node node(ip,port);
+	//starting the node's operation
 	thread node_thread(&Node::start, &node);
+
+	//chat responsible thread, only for backbone nodes excluding the bootstrap.
+/*	if(*my_port != bootstrap_port) {	
+		thread chatThread(&Node::chatInput
+
+	}		
+*/
+
 
 	node_thread.join();
 
