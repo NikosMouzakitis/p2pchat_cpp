@@ -51,17 +51,57 @@ private:
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
 
+	void sendMessageToPeers(const string& content, int sender_port, map<int, int>& sender_clock) {
+		{
+			lock_guard<mutex> lock(clock_mutex);
+			sender_clock[sender_port]++;  // Increment sender's vector clock for the port
+		}
 
-
-
-/*	void sendMessageToPeers(const string& content, int sender_port, map<int, int>& sender_clock) {
-		sender_clock[sender_port]++;  // Increment sender's vector clock for the port
 		string message = to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(sender_clock);
 
-		// Send the message to peers (this part remains the same as before)
-		send_message_to_peers(message);  // Function that sends the message to all peers
-	} 
-*/
+		// Send the message to all peers except itself
+		for (const auto& peer : peers) {
+			if (peer.second.second != sender_port) { // Exclude self
+				int client_socket;
+				struct sockaddr_in peer_address;
+
+				// Create socket
+				if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+					cerr << "Socket creation failed for sending message to " << peer.second.first << ":" << peer.second.second << endl;
+					continue;
+				}
+
+				peer_address.sin_family = AF_INET;
+				peer_address.sin_port = htons(peer.second.second);
+
+				// Convert IP address to binary form
+				if (inet_pton(AF_INET, peer.second.first.c_str(), &peer_address.sin_addr) <= 0) {
+					cerr << "Invalid peer IP address: " << peer.second.first << endl;
+					close(client_socket);
+					continue;
+				}
+
+				// Connect to peer
+				if (connect(client_socket, (struct sockaddr*)&peer_address, sizeof(peer_address)) < 0) {
+					cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
+					close(client_socket);
+					continue;
+				}
+
+				// Send the message
+				ssize_t bytes_sent = send(client_socket, message.c_str(), message.length(), 0);
+				if (bytes_sent == -1) {
+					cerr << "Failed to send message to peer " << peer.second.first << ":" << peer.second.second << endl;
+				} else {
+					cout << "Message sent to peer " << peer.second.first << ":" << peer.second.second << endl;
+				}
+
+				close(client_socket);
+			}
+		}
+	}
+
+
 
 	string formatVectorClock(map<int, int>& vector_clock) {
 		// Format the vector clock as a string (e.g., "1:2, 2:3")
@@ -159,12 +199,12 @@ private:
 
 			while (true) {
 				this_thread::sleep_for(chrono::seconds(1)); // Gossip every 5 seconds
-				cout << "Known peers before gossip" << endl;
-				print_backbone_nodes();
+				//	cout << "Known peers before gossip" << endl;
+				//	print_backbone_nodes();
 
 				// Lock to access peers safely
 				{
-				//	lock_guard<mutex> lock(peer_list_mutex);
+					//	lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 						// Skip querying self
 						if (peer.second.second == port) continue;
@@ -194,14 +234,14 @@ private:
 				// Update heartbeat counter
 				if (list_changed) {
 					heartbeat_counter = 0;
-					cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
+					//		cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
 					list_changed = false; //set false again.
 				} else {
 					heartbeat_counter++;
-					cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
+					//		cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
 				}
-				cout << "Known peers after gossip" << endl;
-				print_backbone_nodes();
+				//	cout << "Known peers after gossip" << endl;
+				//	print_backbone_nodes();
 
 			}
 		}).detach();
@@ -240,8 +280,8 @@ private:
 		// Send GOSSIP request
 		string request = "GOSSIP "+ to_string(*my_port);
 		send(client_socket, request.c_str(), request.length(), 0);
-		cout << "Sent " << request.c_str() << endl;
-/*****************************************************/ //problem to receive here.
+//		cout << "Sent " << request.c_str() << endl;
+		/*****************************************************/ //problem to receive here.
 		// Receive peer list
 		char buffer[1024] = {0};
 		ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
@@ -321,10 +361,10 @@ private:
 				string sender_p;
 				iss >> sender_p;
 				int sender_port = stoi(sender_p);
-				cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
+				//	cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
 				{
-				//	lock_guard<mutex> lock(peer_list_mutex);
+					//	lock_guard<mutex> lock(peer_list_mutex);
 					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
@@ -339,7 +379,7 @@ private:
 							lock_guard<mutex> lock(clock_mutex);
 							vector_clock[sender_port]=0; //initialize vector_clock also here since we add new peer.
 						}
-						cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
+						//			cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
 						list_changed = true;
 					}
 				}
@@ -354,7 +394,7 @@ private:
 					}
 				}
 				// Send the peer list to the requesting node
-				cout << "Sending this: " << peer_list.c_str() << endl;
+				//	cout << "Sending this: " << peer_list.c_str() << endl;
 				send(client_socket, peer_list.c_str(), peer_list.length(), 0);
 
 			} else if (word == "MESSAGE") {
@@ -368,7 +408,7 @@ private:
 				iss >> port_str;
 				getline(iss, content, '~');  // Read until '~' as the message content
 				getline(iss, clock_str);  // Read the rest as the clock
-
+				cout << "received: " << port_str << " " << content << " " << clock_str << endl;
 				int sender_port = stoi(port_str);
 				map<int, int> received_clock;
 
@@ -482,7 +522,7 @@ private:
 	}
 
 	void handleConnection(int client_socket) {
-		cout << "handleConnection() client_socket: " << client_socket << endl;
+		//	cout << "handleConnection() client_socket: " << client_socket << endl;
 
 		char buffer[1024] = {0};
 		struct sockaddr_in peer_address;
@@ -528,6 +568,38 @@ private:
 		close(client_socket); // Ensure the socket is closed properly
 	}
 
+	// Function to handle user input and send it to peers
+	void chatInputThread() {
+
+		bool isOk=false;
+
+		while (true) {
+			isOk=true; //for now testing.
+
+			if(isOk) {
+				string content;
+				cout << "Enter your message: ";
+				getline(cin, content);
+
+				if (content == "exit") {
+					cout << "Exiting chat..." << endl;
+					break;
+				}
+
+				// Lock the vector clock for thread-safe access
+				map<int, int> sender_clock;
+				{
+					lock_guard<mutex> lock(clock_mutex);
+					sender_clock = vector_clock;
+				}
+
+				// Send message to peers
+				sendMessageToPeers(content, *my_port, sender_clock);
+
+				cout << "Message sent to peers: \"" << content << "\"\n";
+			}
+		}
+	}
 
 
 public:
@@ -542,10 +614,13 @@ public:
 	{
 		cout << "test start()" << endl;
 
-
 		if(*my_port != bootstrap_port) {
 			register_to_bootstrap();
 			start_gossip_thread();//start the gossip thread.
+
+			//starting the chat thread.
+			thread chatThread(&Node::chatInputThread, this);
+			chatThread.detach();
 		}
 
 		struct sockaddr_in address;
@@ -621,13 +696,6 @@ int main(int argc, char *argv[])
 	Node node(ip,port);
 	//starting the node's operation
 	thread node_thread(&Node::start, &node);
-
-	//chat responsible thread, only for backbone nodes excluding the bootstrap.
-/*	if(*my_port != bootstrap_port) {	
-		thread chatThread(&Node::chatInput
-
-	}		
-*/
 
 
 	node_thread.join();

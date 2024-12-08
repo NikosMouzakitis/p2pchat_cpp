@@ -14,3 +14,6 @@ to send their peer list and addingi on his peer list any new peer they are conne
 
 ![Gossip Protocol](https://github.com/NikosMouzakitis/p2pchat_cpp/blop/main/media/gossip-protocol.gif)
 
+
+
+
