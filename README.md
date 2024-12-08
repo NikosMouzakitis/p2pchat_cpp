@@ -12,5 +12,5 @@ he is replying back with a list of 2 peers.
 The implemented gossip protocol among the nodes, where a node, asks nodes already known in his peer list, 
 to send their peer list and addingi on his peer list any new peer they are connected to.
 
-![Gossip Protocol](https://github.com/NikosMouzakitis/p2pchat_cpp/blob/main/media/gossip-protocol.mp4)
+![Gossip Protocol](https://github.com/NikosMouzakitis/p2pchat_cpp/blop/main/media/gossip-protocol.gif)
 
