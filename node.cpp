@@ -45,6 +45,8 @@ private:
 	int server_fd;
 	std::map <int, int> vector_clock; //vector clock used for ordering transactions.
 	std::mutex  clock_mutex;  //mutex to hold when modifying vector clock.
+	std::mutex  gossip_reply_mutex;  //mutex to hold when replying to a gossip transmitter.
+	std::mutex  peer_list_mutex;  //mutex to hold when manipulating peer-lists.
 	bool list_changed = false; //gossip list for peers
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
@@ -162,7 +164,7 @@ private:
 
 				// Lock to access peers safely
 				{
-					lock_guard<mutex> lock(clock_mutex);
+					lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 						// Skip querying self
 						if (peer.second.second == port) continue;
@@ -310,6 +312,8 @@ private:
 			} else if(word == "UPDATEFIN") {
 				cout << "received UPDATEFIN" << endl;
 				return (-1);
+
+				//handling of a GOSSIP message.
 			} else if (word == "GOSSIP") {
 
 				bool found = false;
@@ -319,7 +323,7 @@ private:
 				cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
 				{
-					lock_guard<mutex> lock(clock_mutex);
+					lock_guard<mutex> lock(peer_list_mutex);
 					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
@@ -330,7 +334,10 @@ private:
 					if(!found) {
 						int new_peer_id = total_peers++;
 						peers[new_peer_id]= {sender_ip, sender_port};
-						vector_clock[sender_port]=0; //initialize vector_clock also here since we add new peer.
+						{
+							lock_guard<mutex> lock(clock_mutex);
+							vector_clock[sender_port]=0; //initialize vector_clock also here since we add new peer.
+						}
 						cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
 						list_changed = true;
 					}
@@ -340,7 +347,7 @@ private:
 				// Create a string representation of the peer list
 
 				{
-					lock_guard<mutex> lock(clock_mutex);
+					lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 						peer_list += peer.second.first + " " + to_string(peer.second.second) + " ";
 					}
