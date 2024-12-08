@@ -57,7 +57,7 @@ private:
 			sender_clock[sender_port]++;  // Increment sender's vector clock for the port
 		}
 
-		string message = to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(sender_clock);
+		string message = "MESSAGE "+ to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(sender_clock);
 
 		// Send the message to all peers except itself
 		for (const auto& peer : peers) {
@@ -315,6 +315,36 @@ private:
 		std::cout << "}" << std::endl;
 	}
 
+	void printMessageQueue() {
+		lock_guard<mutex> lock(clock_mutex);  // Ensure thread safety
+		cout << "Current Message Queue:" << endl;
+
+		if (messageQueue.empty()) {
+			cout << "Queue is empty." << endl;
+			return;
+		}
+
+		queue<PeerMessage> tempQueue = messageQueue;  // Make a copy to preserve the original queue
+
+		while (!tempQueue.empty()) {
+			PeerMessage msg = tempQueue.front();
+			tempQueue.pop();
+
+			// Print details of the message
+			cout << "Message from " << msg.sender_ip << ":" << msg.sender_port
+			     << " - \"" << msg.content << "\" - Clock: ";
+
+			// Print the vector clock
+			for (const auto& [port, time] : msg.vector_clock) {
+				cout << port << ":" << time << " ";
+			}
+			cout << endl;
+		}
+	}
+
+
+
+
 	//BACKBONE nodes
 	int handle_message(int client_socket, string buf, const string& sender_ip)
 	{
@@ -322,7 +352,7 @@ private:
 		string word;
 
 		while (iss >> word) {
-
+		///	cout << "WORD" << " " << word << endl;
 			////Update message arrived from Bootstrap node.
 			if (word == "UPDATE") {
 				cout << "Received UPDATE msg from Bootstrap node" << endl;
@@ -403,12 +433,13 @@ private:
 				string port_str;
 				string content;
 				string clock_str;
-
+				
+			//	cout << "ASDASDASDASDASDA"<<endl;
 				// Extract the port, message content, and vector clock
 				iss >> port_str;
 				getline(iss, content, '~');  // Read until '~' as the message content
 				getline(iss, clock_str);  // Read the rest as the clock
-				cout << "received: " << port_str << " " << content << " " << clock_str << endl;
+			//	cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
 				int sender_port = stoi(port_str);
 				map<int, int> received_clock;
 
@@ -424,18 +455,37 @@ private:
 					}
 				}
 
+				std::cout << "Received Vector Clock: { ";
+				for (const auto& entry : vector_clock) {
+					std::cout << entry.first << ": " << entry.second << ", ";
+				}
+				std::cout << "}" << std::endl;
+	
 				// Create the PeerMessage object with content, vector clock, sender IP, and sender port
 				PeerMessage receivedMessage(content, received_clock, sender_ip, sender_port);
 
 				// Enqueue the message to be processed later
 				enqueueMessage(receivedMessage);
-
+				printMessageQueue();
 				// Process the message queue in order of vector clocks
 				while (!messageQueue.empty()) {
 					PeerMessage msg = messageQueue.front();
-					if (compareVectorClocks(msg.vector_clock, receivedMessage.vector_clock)) {
-						cout << "Processing message from " << sender_ip << ": " << msg.content << endl;
+					// Check causal order
+					if (compareVectorClocks(msg.vector_clock, vector_clock)) {
+						// Update the receiver's vector clock for the sender
+						{
+							lock_guard<mutex> lock(clock_mutex);
+							vector_clock[msg.sender_port] = max(vector_clock[msg.sender_port], msg.vector_clock[msg.sender_port]);
+						}
+
+						// Print the message
+						cout << "Processing message from " << msg.sender_ip << ":" << msg.sender_port << " - " << msg.content << endl;
+
+						// Remove the message from the queue
 						messageQueue.pop();
+					} else {
+						// Stop processing if the front message isn't ready
+						break;
 					}
 				}
 			}
