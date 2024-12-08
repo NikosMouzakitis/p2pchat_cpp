@@ -4,6 +4,7 @@
 #include <chrono>
 #include <thread>
 #include <sys/socket.h>
+#include <queue>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -12,10 +13,27 @@
 #include <cstring>
 #include <sstream>
 #include <cstdlib> // malloc
+#include <algorithm>
+
 using namespace std;
 
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
+
+struct PeerMessage {
+	string content;
+	map<int, int> vector_clock;
+	string sender_ip;
+	int sender_port;
+
+	PeerMessage(string msg_content, map<int, int> clock, string ip, int port) {
+		content=msg_content;
+		vector_clock=clock;
+		sender_ip=ip;
+		sender_port=port;
+	}
+};
+
 
 class Node {
 
@@ -28,6 +46,73 @@ private:
 	std::map <int, int> vector_clock; //vector clock used for ordering transactions.
 	std::mutex  clock_mutex;  //mutex to hold when modifying vector clock.
 	bool list_changed = false; //gossip list for peers
+	queue<PeerMessage> messageQueue; //holding incoming messages.
+
+
+
+
+
+/*	void sendMessageToPeers(const string& content, int sender_port, map<int, int>& sender_clock) {
+		sender_clock[sender_port]++;  // Increment sender's vector clock for the port
+		string message = to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(sender_clock);
+
+		// Send the message to peers (this part remains the same as before)
+		send_message_to_peers(message);  // Function that sends the message to all peers
+	} 
+*/
+
+	string formatVectorClock(map<int, int>& vector_clock) {
+		// Format the vector clock as a string (e.g., "1:2, 2:3")
+		stringstream ss;
+		for (const auto& entry : vector_clock) {
+			ss << entry.first << ":" << entry.second << ",";
+		}
+		return ss.str();
+	}
+
+	void enqueueMessage(PeerMessage newMessage) {
+		// Place the message in the queue
+		messageQueue.push(newMessage);
+
+		// Sort messages in the queue based on vector clock
+		// In a real application, you'd likely implement a priority queue or use custom sorting
+		vector<PeerMessage> tempQueue;
+		while (!messageQueue.empty()) {
+			tempQueue.push_back(messageQueue.front());
+			messageQueue.pop();
+		}
+
+		// Sort the queue by vector clock comparison
+		sort(tempQueue.begin(), tempQueue.end(), [this](PeerMessage& a, PeerMessage& b) {
+			return compareVectorClocks(a.vector_clock, b.vector_clock);
+		});
+
+		// Refill the queue
+		for (const auto& msg : tempQueue) {
+			messageQueue.push(msg);
+		}
+	}
+	bool compareVectorClocks(const map<int, int>& clock1, const map<int, int>& clock2) {
+		bool isGreater = false;
+		bool isLesser = false;
+
+		for (const auto& [port, time] : clock1) {
+			if (clock2.find(port) != clock2.end()) {  // Correct use of find()
+				if (clock2.at(port) > time) isGreater = true;
+				if (clock2.at(port) < time) isLesser = true;
+			} else {
+				isLesser = true;  // If clock2 doesn't have this port, it's less than
+			}
+		}
+
+		for (const auto& [port, time] : clock2) {
+			if (clock1.find(port) == clock1.end()) {  // Correct use of find()
+				isGreater = true;  // If clock1 doesn't have this port, clock2 is greater
+			}
+		}
+
+		return isGreater && !isLesser;
+	}
 
 	// BOOTSTRAP NODE operation
 	// sends to the connected node 2 other peers data(ip:port)
@@ -61,7 +146,7 @@ private:
 		cout << "Sent update-FIN message: " << update << endl;
 
 	}
-	
+
 	//BACKBONE NODES   starting the gossip thread.
 	void start_gossip_thread() {
 		thread([this]() {
@@ -174,7 +259,7 @@ private:
 
 	//BACKBONE nodes
 	void initializeVectorClock(int p_port) {
-		std::lock_guard<std::mutex> lock(clock_mutex);
+		std::lock_guard<std::mutex> lock(clock_mutex); //remove it prob. or re-write inline.
 		vector_clock[p_port] = 0;
 	}
 	//BACKBONE nodes
@@ -227,32 +312,33 @@ private:
 				return (-1);
 			} else if (word == "GOSSIP") {
 
-				cout << "Received GOSSIP request from " << sender_ip << ":" << endl;
 				bool found = false;
 				string sender_p;
 				iss >> sender_p;
 				int sender_port = stoi(sender_p);
+				cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
-				{ 
+				{
 					lock_guard<mutex> lock(clock_mutex);
-					for(const auto& peer: peers){
+					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
 							break;
-						}	
+						}
 					}
 					//add to peer list if not in the list.
 					if(!found) {
 						int new_peer_id = total_peers++;
 						peers[new_peer_id]= {sender_ip, sender_port};
+						vector_clock[sender_port]=0; //initialize vector_clock also here since we add new peer.
 						cout << "Added new peer from GOSSIP sender: " << sender_ip << " : " << sender_port << endl;
 						list_changed = true;
 					}
 				}
-				
+
 				string peer_list;
 				// Create a string representation of the peer list
-				
+
 				{
 					lock_guard<mutex> lock(clock_mutex);
 					for (const auto& peer : peers) {
@@ -262,7 +348,50 @@ private:
 				// Send the peer list to the requesting node
 				cout << "Sending this: " << peer_list.c_str() << endl;
 				send(client_socket, peer_list.c_str(), peer_list.length(), 0);
+
+			} else if (word == "MESSAGE") {
+
+				// Handle MESSAGE with vector clock
+				string port_str;
+				string content;
+				string clock_str;
+
+				// Extract the port, message content, and vector clock
+				iss >> port_str;
+				getline(iss, content, '~');  // Read until '~' as the message content
+				getline(iss, clock_str);  // Read the rest as the clock
+
+				int sender_port = stoi(port_str);
+				map<int, int> received_clock;
+
+				// Parse the vector clock (this assumes it's a space-separated "port:time" format)
+				istringstream clock_stream(clock_str);
+				string clock_entry;
+				while (getline(clock_stream, clock_entry, ' ')) {
+					size_t colon_pos = clock_entry.find(':');
+					if (colon_pos != string::npos) {
+						int peer_port = stoi(clock_entry.substr(0, colon_pos));
+						int time = stoi(clock_entry.substr(colon_pos + 1));
+						received_clock[peer_port] = time;
+					}
+				}
+
+				// Create the PeerMessage object with content, vector clock, sender IP, and sender port
+				PeerMessage receivedMessage(content, received_clock, sender_ip, sender_port);
+
+				// Enqueue the message to be processed later
+				enqueueMessage(receivedMessage);
+
+				// Process the message queue in order of vector clocks
+				while (!messageQueue.empty()) {
+					PeerMessage msg = messageQueue.front();
+					if (compareVectorClocks(msg.vector_clock, receivedMessage.vector_clock)) {
+						cout << "Processing message from " << sender_ip << ": " << msg.content << endl;
+						messageQueue.pop();
+					}
+				}
 			}
+
 		}
 		return 0;
 	}
@@ -350,7 +479,7 @@ private:
 		char buffer[1024] = {0};
 		struct sockaddr_in peer_address;
 		socklen_t peer_address_len = sizeof(peer_address);
-		
+
 		if(getpeername(client_socket, (struct sockaddr *)&peer_address, &peer_address_len) == -1) {
 			cout << "failed to get peer information" << endl;
 			close(client_socket);

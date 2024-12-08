@@ -1,4 +1,4 @@
 all:
-	g++ -pthread -o node node.cpp 
+	g++ -pthread -std=c++17 -o node node.cpp 
 clean:
 	rm node 
