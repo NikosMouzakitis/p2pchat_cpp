@@ -16,7 +16,7 @@
 #include <algorithm>
 
 using namespace std;
-
+int debug = 0;
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
@@ -58,7 +58,9 @@ private:
 		}
 
 		string message = "MESSAGE "+ to_string(sender_port) + " ~" + content + "~ " + formatVectorClock(vector_clock);
-		cout << "sending : -----> " << message << endl;
+		if(debug)
+			cout << "sending : -----> " << message << endl;
+
 		// Send the message to all peers except itself
 		for (const auto& peer : peers) {
 			if (peer.second.second != sender_port) { // Exclude self
@@ -93,7 +95,8 @@ private:
 				if (bytes_sent == -1) {
 					cerr << "Failed to send message to peer " << peer.second.first << ":" << peer.second.second << endl;
 				} else {
-					cout << "Message sent to peer " << peer.second.first << ":" << peer.second.second << endl;
+					if(debug)
+						cout << "Message sent to peer " << peer.second.first << ":" << peer.second.second << endl;
 				}
 
 				close(client_socket);
@@ -114,7 +117,6 @@ private:
 
 	void enqueueMessage(PeerMessage newMessage) {
 		// Place the message in the queue
-		cout << "enq. n m" << endl;
 
 		messageQueue.push(newMessage);
 
@@ -136,6 +138,7 @@ private:
 			messageQueue.push(msg);
 		}
 	}
+	//study.
 	bool compareVectorClocks(const map<int, int>& clock1, const map<int, int>& clock2) {
 		bool isGreater = false;
 		bool isLesser = false;
@@ -319,32 +322,31 @@ private:
 
 	void printMessageQueue() {
 		lock_guard<mutex> lock(clock_mutex);  // Ensure thread safety
-		cout << "Current Message Queue:" << endl;
 
 		if (messageQueue.empty()) {
 			cout << "Queue is empty." << endl;
 			return;
 		}
-
-		queue<PeerMessage> tempQueue = messageQueue;  // Make a copy to preserve the original queue
-
+		
+		PeerMessage firstMessage = messageQueue.front(); //access the first message in the queue.
+		cout << "Message from " << firstMessage.sender_port << " - " << firstMessage.content << endl; //display
+		messageQueue.pop(); //remove the first message.
+/*
+//		queue<PeerMessage> tempQueue = messageQueue;  // Make a copy to preserve the original queue
 		while (!tempQueue.empty()) {
 			PeerMessage msg = tempQueue.front();
 			tempQueue.pop();
-
 			// Print details of the message
 			cout << "Message from " << msg.sender_ip << ":" << msg.sender_port
 			     << " - \"" << msg.content << "\" - Clock: ";
-
 			// Print the vector clock
 			for (const auto& [port, time] : msg.vector_clock) {
 				cout << port << ":" << time << " ";
 			}
 			cout << endl;
 		}
+		*/
 	}
-
-
 
 
 	//BACKBONE nodes
@@ -357,7 +359,8 @@ private:
 			///	cout << "WORD" << " " << word << endl;
 			////Update message arrived from Bootstrap node.
 			if (word == "UPDATE") {
-				cout << "Received UPDATE msg from Bootstrap node" << endl;
+				if(debug)
+					cout << "Received UPDATE msg from Bootstrap node" << endl;
 				string p_ip;
 				string p_port;// as string and convert when saving as a map.
 
@@ -375,7 +378,8 @@ private:
 					//if we don't have already added this peer, add it on peers Map.
 					if(!portExists) {
 						peers[total_peers] = {p_ip, stoi(p_port)}; // Store in the map
-						cout << "Added peer IP: " << peers[total_peers].first << " Port: " << peers[total_peers].second << endl;
+						if(debug)
+							cout << "Added peer IP: " << peers[total_peers].first << " Port: " << peers[total_peers].second << endl;
 						initializeVectorClock(stoi(p_port)); //initialize the vector clock for the newly added node.
 						total_peers++; // Increment the key counter
 					}
@@ -383,9 +387,9 @@ private:
 				printVectorClock();
 
 			} else if(word == "UPDATEFIN") {
-				cout << "received UPDATEFIN" << endl;
+				if(debug)
+					cout << "received UPDATEFIN" << endl;
 				return (-1);
-
 				//handling of a GOSSIP message.
 			} else if (word == "GOSSIP") {
 
@@ -435,18 +439,26 @@ private:
 				string port_str;
 				string content;
 				string clock_str;
+				
 
-				//	cout << "ASDASDASDASDASDA"<<endl;
+				if(debug)
+					cout << "Received message!: ::: " << buf << endl;
+				
 				// Extract the port, message content, and vector clock
 				iss >> port_str;
-				getline(iss, content, '~');  // Read until '~' as the message content
-				getline(iss, clock_str);  // Read the rest as the clock
-				//	cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
-				int sender_port = stoi(port_str);
-				map<int, int> received_clock;
-				// Parse the vector clock (this assumes it's a comma-separated "port:time" format)
+				getline(iss, content, '~');  // skiping the first '~'
+				getline(iss, content, '~');  // Read until the second '~'  the content
+
+				getline(iss, clock_str);  // Read the rest as the clock received
+				clock_str = clock_str.substr(clock_str.find_first_not_of(" ")); //trim leading " ".
+				if(debug)
+					cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
+				
+				// Parse the vector clock (comma-separated "port:time" for our format)
 				istringstream clock_stream(clock_str);
 				string clock_entry;
+				int sender_port = stoi(port_str);
+				map<int, int> received_clock;
 
 				while (getline(clock_stream, clock_entry, ',')) {
 					// Skip any empty entries caused by trailing commas
@@ -466,14 +478,15 @@ private:
 						}
 					}
 				}
-
+				
+				if(debug) {
 				// Debugging: Print the received vector clock
-				std::cout << "Received Vector Clock: { ";
-				for (const auto& entry : received_clock) {
-					std::cout << entry.first << ": " << entry.second << ", ";
+					std::cout << "Received Vector Clock: { ";
+					for (const auto& entry : received_clock) {
+						std::cout << entry.first << ": " << entry.second << ", ";
+					}
+					std::cout << "}" << std::endl;
 				}
-				std::cout << "}" << std::endl;
-
 
 				// Create the PeerMessage object with content, vector clock, sender IP, and sender port
 				PeerMessage receivedMessage(content, received_clock, sender_ip, sender_port);
@@ -481,38 +494,7 @@ private:
 				// Enqueue the message to be processed later
 				enqueueMessage(receivedMessage);
 				printMessageQueue();
-				cout << sender_port + " says: " + content << endl;	
 
-				/*
-
-				// Process the message queue in order of vector clocks
-				while (!messageQueue.empty()) {
-					PeerMessage msg = messageQueue.front();
-					cout << msg.content << endl;	
-
-
-					
-					// Check causal order
-					if (compareVectorClocks(msg.vector_clock, vector_clock)) {
-						// Update the receiver's vector clock for the sender
-						{
-							lock_guard<mutex> lock(clock_mutex);
-							vector_clock[msg.sender_port] = max(vector_clock[msg.sender_port], msg.vector_clock[msg.sender_port]);
-						}
-
-						// Print the message
-						cout << "Processing message from " << msg.sender_ip << ":" << msg.sender_port << " - " << msg.content << endl;
-
-						// Remove the message from the queue
-						messageQueue.pop();
-					} else {
-						// Stop processing if the front message isn't ready
-						break;
-					}
-
-					
-				}
-				*/
 			}
 
 		}
@@ -523,7 +505,9 @@ private:
 	void register_to_bootstrap(void) {
 		string cmd = "REGISTER";
 		string my_reg = cmd + " " + node_ip + " " + to_string(port);
-		cout << "Registering to the Bootstrap node as: " << my_reg << endl;
+
+		if(debug)
+			cout << "Registering to the Bootstrap node as: " << my_reg << endl;
 
 		string n_ip = "127.0.0.1";
 		int n_port = bootstrap_port;
@@ -551,8 +535,9 @@ private:
 			close(client_socket);
 			return;
 		}
-
-		cout << "Connected to node at " << n_ip << ":" << n_port << endl;
+		
+		if(debug)
+			cout << "Connected to node at " << n_ip << ":" << n_port << endl;
 
 		while (true) {
 			// Send the registration message to bootstrap node
@@ -562,8 +547,8 @@ private:
 				cerr << "Failed to send message to bootstrap node\n";
 				continue; // Retry
 			}
-
-			cout << "Sent registration message: " << my_reg << endl;
+			if(debug)		
+				cout << "Sent registration message: " << my_reg << endl;
 			break;
 		}
 
@@ -573,7 +558,8 @@ private:
 			ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
 			if (bytes_received > 0) {
 				buffer[bytes_received] = '\0'; // Null-terminate the received message
-				cout << "Received reply from bootstrap node: " << buffer << endl;
+				if(debug)
+					cout << "Received reply from bootstrap node: " << buffer << endl;
 				if(handle_message(client_socket, buffer, "0") == -1)
 					break;
 			} else {
@@ -582,7 +568,8 @@ private:
 		}
 		// Close the socket after the reply is received
 		close(client_socket);
-		cout << "Disconnected from bootstrap node.\n";
+		if(debug)
+			cout << "Disconnected from bootstrap node.\n";
 	}
 
 
@@ -649,11 +636,12 @@ private:
 		bool isOk=false;
 
 		while (true) {
+
 			isOk=true; //for now testing.
 
 			if(isOk) {
 				string content;
-				cout << "Enter your message: ";
+				cout << "Enter your message: " << endl;
 				getline(cin, content);
 
 				if (content == "exit") {
@@ -671,7 +659,8 @@ private:
 				// Send message to peers
 				sendMessageToPeers(content, *my_port, sender_clock);
 
-				cout << "Message sent to peers: \"" << content << "\"\n";
+				if(debug)
+					cout << "Message sent to peers: \"" << content << "\"\n";
 			}
 		}
 	}
@@ -687,7 +676,6 @@ public:
 
 	int start()
 	{
-		cout << "test start()" << endl;
 
 		if(*my_port != bootstrap_port) {
 			register_to_bootstrap();
@@ -722,6 +710,7 @@ public:
 			cout << "Listen failed" << endl;
 			return -1;
 		}
+	
 		cout << "node running on port " << port << endl;
 
 		if(port == bootstrap_port)
