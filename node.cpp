@@ -16,7 +16,7 @@
 #include <algorithm>
 
 using namespace std;
-int debug = 1;
+int debug = 0; //1-debug 0-no debug
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
@@ -48,6 +48,9 @@ private:
 	std::mutex  gossip_reply_mutex;  //mutex to hold when replying to a gossip transmitter.
 	std::mutex  peer_list_mutex;  //mutex to hold when manipulating peer-lists.
 	bool list_changed = false; //gossip list for peers
+	bool canSendMessages = false; //ability to send messages to other peers.
+	int DESIRED_HEARTBEATS = 4;
+
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
 
@@ -203,9 +206,7 @@ private:
 			map<int, pair<string, int>> previous_peers;
 
 			while (true) {
-				this_thread::sleep_for(chrono::seconds(1)); // Gossip every 5 seconds
-				//	cout << "Known peers before gossip" << endl;
-				//	print_backbone_nodes();
+				this_thread::sleep_for(chrono::milliseconds(100)); // Gossip every 300  millisecs
 
 				// Lock to access peers safely
 				{
@@ -239,11 +240,14 @@ private:
 				// Update heartbeat counter
 				if (list_changed) {
 					heartbeat_counter = 0;
+					canSendMessages = false;
 					if(debug)
 						cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
 					list_changed = false; //set false again.
 				} else {
 					heartbeat_counter++;
+					if(heartbeat_counter >= DESIRED_HEARTBEATS)
+						canSendMessages = true;
 					if(debug)
 						cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
 				}
@@ -387,7 +391,7 @@ private:
 						total_peers++; // Increment the key counter
 					}
 				}
-				printVectorClock();
+			//	printVectorClock();
 
 			} else if(word == "UPDATEFIN") {
 				if(debug)
@@ -640,7 +644,8 @@ private:
 
 		while (true) {
 
-			isOk=true; //for now testing.
+			//isOk=true; //for now testing.
+			isOk = canSendMessages;
 
 			if(isOk) {
 				string content;
@@ -664,6 +669,10 @@ private:
 
 				if(debug)
 					cout << "Message sent to peers: \"" << content << "\"\n";
+			} else {
+			//	cout << "Updating peers" << endl;
+			//	this_thread::sleep_for(chrono::seconds(1)); //wait 1second.
+				char dump = 'x';
 			}
 		}
 	}
@@ -682,7 +691,7 @@ public:
 
 		if(*my_port != bootstrap_port) {
 			register_to_bootstrap();
-			start_gossip_thread();//start the gossip thread.
+			start_gossip_thread(); //start the gossip thread.
 
 			//starting the chat thread.
 			thread chatThread(&Node::chatInputThread, this);
