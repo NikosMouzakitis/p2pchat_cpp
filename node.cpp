@@ -16,7 +16,7 @@
 #include <algorithm>
 
 using namespace std;
-int debug = 0;
+int debug = 1;
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
@@ -239,14 +239,17 @@ private:
 				// Update heartbeat counter
 				if (list_changed) {
 					heartbeat_counter = 0;
-					//		cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
+					if(debug)
+						cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
 					list_changed = false; //set false again.
 				} else {
 					heartbeat_counter++;
-					//		cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
+					if(debug)
+						cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
 				}
-				//	cout << "Known peers after gossip" << endl;
-				//	print_backbone_nodes();
+
+				if(debug)	
+					print_backbone_nodes();
 
 			}
 		}).detach();
