@@ -458,6 +458,7 @@ private:
 
 				getline(iss, clock_str);  // Read the rest as the clock received
 				clock_str = clock_str.substr(clock_str.find_first_not_of(" ")); //trim leading " ".
+
 				if(debug)
 					cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
 				
@@ -485,7 +486,8 @@ private:
 						}
 					}
 				}
-				
+
+				debug = 1;	
 				if(debug) {
 				// Debugging: Print the received vector clock
 					std::cout << "Received Vector Clock: { ";
@@ -493,6 +495,17 @@ private:
 						std::cout << entry.first << ": " << entry.second << ", ";
 					}
 					std::cout << "}" << std::endl;
+				}
+				debug = 0;
+
+				//update our local vector clock for this peer.
+				vector_clock[sender_port]++;
+				//check if we should adjust clock for other peers as well. 
+				//this is the case where we have not sent anything and received next message etc.
+				if(vector_clock[*my_port] == received_clock[*my_port]) {
+					for (const auto& peer : peers) {
+						vector_clock[peer.second.second] = received_clock[peer.second.second];
+					}
 				}
 
 				// Create the PeerMessage object with content, vector clock, sender IP, and sender port
