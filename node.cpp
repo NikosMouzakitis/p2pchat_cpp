@@ -201,7 +201,7 @@ private:
 	void start_gossip_thread() {
 		thread([this]() {
 
-			this_thread::sleep_for(chrono::seconds(3)); // Gossip every 5 seconds
+			this_thread::sleep_for(chrono::seconds(3)); // Gossip every 3 seconds
 			int heartbeat_counter = 0;
 			map<int, pair<string, int>> previous_peers;
 
@@ -217,11 +217,12 @@ private:
 
 						// Query peer for its known peers
 						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
-
+						
 						// Merge received peers with local peers
 						for (const auto& received_peer : received_peers) {
 							bool found = false;
 							for (const auto& existing_peer : peers) {
+								cout << "1" << endl;
 								if (existing_peer.second.first == received_peer.first &&
 								                existing_peer.second.second == received_peer.second) {
 									found = true;
@@ -229,6 +230,7 @@ private:
 								}
 							}
 							if (!found) {
+								cout << "2" << endl;
 								int new_peer_id = total_peers++;
 								peers[new_peer_id] = {received_peer.first, received_peer.second};
 								list_changed = true;
@@ -282,10 +284,34 @@ private:
 			return peer_list;
 		}
 
+
+
+		// Setting the socket timeout for receiving data
+		struct timeval timeout;
+		timeout.tv_sec = 0;  // Timeout in seconds
+		timeout.tv_usec = 30000; // Timeout in microseconds (0.2ms)
+
+		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+			std::cerr << "Error setting socket timeout" << std::endl;
+			close(client_socket);
+			return peer_list;
+		}
+
 		// Connect to peer
 		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
-			cerr << "Connection to peer failed\n";
-			close(client_socket);
+
+			cerr << "Connection to peer failed query_peer_for_peers()\n";
+			//1st step delete the peer from the peer list
+			for (auto it = peers.begin(); it != peers.end(); ++it) {
+				if (it->second.second == peer_port) { // Compare the port 
+					peers.erase(it);             // Erase the entry
+					cout << "Deleted peer with port: " << port << endl;
+					return peer_list;                      // Exit after deletion
+				}	
+			}
+
+			close(client_socket); //close the socket.
+			cout << "closed client socket " << endl;
 			return peer_list;
 		}
 
@@ -305,8 +331,12 @@ private:
 			while (iss >> peer_ip >> peer_port) {
 				peer_list.push_back({peer_ip, peer_port});
 			}
+		} else if (bytes_received < 0) {
+			if (errno == EWOULDBLOCK || errno == EAGAIN) {
+			// Timeout occurred
+			cerr << "Timeout occurred: No response from peer\n";
+			} 
 		}
-
 		close(client_socket);
 		return peer_list;
 	}
