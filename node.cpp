@@ -301,8 +301,6 @@ private:
 			return peer_list;
 		}
 
-
-
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
@@ -323,14 +321,18 @@ private:
 			//if connection fails
 			if(debug)
 				cout << "Connection to peer failed query_peer_for_peers()\n";
-			//1st step delete the non-active peer from the peer list.
 			for(auto it = peers.begin(); it != peers.end(); ) {
 				//erase condition
+				//1st step delete the non-active peer from the peer list.
+				//2nd step delete entry from vector_clock.
 				if(it->second.second == peer_port) {
 					it = peers.erase(it);
 					total_peers--;
 					list_changed = true;
-
+					{
+						std::lock_guard<std::mutex> lock(clock_mutex); //lock it in this scoope for erasement.
+						vector_clock.erase(peer_port); //vector clock erasing.
+					}
 					if(debug) {
 						cout << "Deleted peer with port: " << peer_port << endl;
 						cout << "returning " << endl;
