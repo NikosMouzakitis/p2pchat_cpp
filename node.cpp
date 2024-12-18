@@ -16,7 +16,7 @@
 #include <algorithm>
 
 using namespace std;
-int debug = 1; //1-debug 0-no debug
+int debug = 0; //1-debug 0-no debug
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
@@ -88,7 +88,7 @@ private:
 
 				// Connect to peer
 				if (connect(client_socket, (struct sockaddr*)&peer_address, sizeof(peer_address)) < 0) {
-					cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
+			//		cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
 					close(client_socket);
 					continue;
 				}
@@ -206,41 +206,38 @@ private:
 
 			while (true) {
 				this_thread::sleep_for(chrono::milliseconds(400)); // Gossip every 500  millisecs
-				cout << "did my sleep" << endl;
 				
 				//no reason to involve gossip, if we are alone.
 				if(total_peers == 1)
 					continue;
 				// Lock to access peers safely
 				{
-					cout << "going to for" << endl;
-						lock_guard<mutex> lock(peer_list_mutex);
+					lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 						
-						cout << "sgt: " << endl;
-						print_backbone_nodes();
+					//	cout << "sgt: " << peer.second.second << endl;
+					//	print_backbone_nodes();
 
 						// Skip querying self
 						if (peer.second.second == port) continue;
 
 						// Query peer for its known peers
-						cout << "asking 3: " << peer.second.second << endl;
 
 						if(peer.second.second == 0) 
 						{
-							cout << "going in continue" << endl;
-							print_backbone_nodes();
 							continue;
 						}
-						cout << "asking 4: " << peer.second.second << endl;
 
 						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
+						//if null vector returned continue, deletion happened on peer list
+						if(received_peers.empty()) {
+							break; //nothing to merge
+						}	
 						
 						// Merge received peers with local peers
 						for (const auto& received_peer : received_peers) {
 							bool found = false;
 							for (const auto& existing_peer : peers) {
-								cout << "1" << endl;
 								if (existing_peer.second.first == received_peer.first &&
 								                existing_peer.second.second == received_peer.second) {
 									found = true;
@@ -250,7 +247,7 @@ private:
 
 							//found new peer in the list
 							if (!found) {
-								cout << "2" << endl;
+								//is this correct here? 
 								int new_peer_id = total_peers++;
 								peers[new_peer_id] = {received_peer.first, received_peer.second};
 								list_changed = true;
@@ -319,30 +316,13 @@ private:
 		}
 
 		// Connect to peer for asking peer list
-		cout << "connecting to peer: " << peer_port << endl;
+		if(debug)
+			cout << "connecting to peer: " << peer_port << endl;
 
 		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
-			
 			//if connection fails
-			cerr << "Connection to peer failed query_peer_for_peers()\n";
-		
-		/*	
-			//1st step delete the peer from the peer list
-			for (auto it = peers.begin(); it != peers.end(); ++it) {
-				if (it->second.second == peer_port) { // Compare the port 
-					peers.erase(it);             // Erase the entry
-					total_peers--;	//decrement total peers
-					cout << "Deleted peer with port: " << peer_port << endl;
-					cout << "returning " << endl;
-					list_changed = true;	//peer list has actually changed by deleting a node.
-					for(const auto& lala : peer_list) {
-						cout << lala.first << ", " << lala.second << endl;
-					}
-					return peer_list;                      // Exit after deletion
-				}	
-			}
-		*/
-
+			if(debug)
+				cout << "Connection to peer failed query_peer_for_peers()\n";
 			//1st step delete the non-active peer from the peer list.
 			for(auto it = peers.begin(); it != peers.end(); ) {
 				//erase condition
@@ -350,13 +330,16 @@ private:
 					it = peers.erase(it);
 					total_peers--;
 					list_changed = true;
-					cout << "Deleted peer with port: " << peer_port << endl;
-					cout << "returning " << endl;
-					for(const auto& lala : peer_list) {
-						cout << lala.first << ", " << lala.second << endl;
 
+					if(debug) {
+						cout << "Deleted peer with port: " << peer_port << endl;
+						cout << "returning " << endl;
+						for(const auto& lala : peer_list) {
+							cout << lala.first << ", " << lala.second << endl;
+						}
 					}
-					return peer_list;
+
+					return {}; //return empty vector to denote that deletion already occured.
 				} else {
 					++it;
 				}
@@ -386,7 +369,7 @@ private:
 		} else if (bytes_received < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
 			// Timeout occurred
-			cerr << "Timeout occurred: No response from peer\n";
+			cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
 			} 
 		}
 		close(client_socket);
@@ -466,11 +449,16 @@ private:
 					}
 					//if we don't have already added this peer, add it on peers Map.
 					if(!portExists) {
-						peers[total_peers] = {p_ip, stoi(p_port)}; // Store in the map
-						if(debug)
-							cout << "Added peer IP: " << peers[total_peers].first << " Port: " << peers[total_peers].second << endl;
-						initializeVectorClock(stoi(p_port)); //initialize the vector clock for the newly added node.
-						total_peers++; // Increment the key counter
+						
+						{	
+							//lock on accessing peers
+							lock_guard<mutex> lock(peer_list_mutex);
+							peers[total_peers] = {p_ip, stoi(p_port)}; // Store in the map
+							if(debug)
+								cout << "Added peer IP: " << peers[total_peers].first << " Port: " << peers[total_peers].second << endl;
+							initializeVectorClock(stoi(p_port)); //initialize the vector clock for the newly added node.
+							total_peers++; // Increment the key counter
+						}
 					}
 				}
 			//	printVectorClock();
@@ -718,8 +706,8 @@ private:
 				if (command.compare(register_cmd) == 0) {
 					total_peers++;
 					peers[total_peers] = make_pair(peer_node_ip, peer_node_port);
-					cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
-					print_backbone_nodes();
+					//cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
+					//print_backbone_nodes();
 					send_updated_peer_list(client_socket);
 				} else {
 					cout << "Received non-REGISTER command\n";
