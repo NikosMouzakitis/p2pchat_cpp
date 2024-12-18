@@ -16,7 +16,7 @@
 #include <algorithm>
 
 using namespace std;
-int debug = 0; //1-debug 0-no debug
+int debug = 1; //1-debug 0-no debug
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
@@ -203,19 +203,37 @@ private:
 
 			this_thread::sleep_for(chrono::seconds(3)); // Gossip every 3 seconds
 			int heartbeat_counter = 0;
-			map<int, pair<string, int>> previous_peers;
 
 			while (true) {
-				this_thread::sleep_for(chrono::milliseconds(100)); // Gossip every 300  millisecs
-
+				this_thread::sleep_for(chrono::milliseconds(400)); // Gossip every 500  millisecs
+				cout << "did my sleep" << endl;
+				
+				//no reason to involve gossip, if we are alone.
+				if(total_peers == 1)
+					continue;
 				// Lock to access peers safely
 				{
-					//	lock_guard<mutex> lock(peer_list_mutex);
+					cout << "going to for" << endl;
+						lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
+						
+						cout << "sgt: " << endl;
+						print_backbone_nodes();
+
 						// Skip querying self
 						if (peer.second.second == port) continue;
 
 						// Query peer for its known peers
+						cout << "asking 3: " << peer.second.second << endl;
+
+						if(peer.second.second == 0) 
+						{
+							cout << "going in continue" << endl;
+							print_backbone_nodes();
+							continue;
+						}
+						cout << "asking 4: " << peer.second.second << endl;
+
 						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
 						
 						// Merge received peers with local peers
@@ -229,6 +247,8 @@ private:
 									break;
 								}
 							}
+
+							//found new peer in the list
 							if (!found) {
 								cout << "2" << endl;
 								int new_peer_id = total_peers++;
@@ -289,25 +309,57 @@ private:
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
-		timeout.tv_usec = 30000; // Timeout in microseconds (0.2ms)
-
+		timeout.tv_usec = 40000; // Timeout in microseconds (0.2ms)
+		
+		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
 			std::cerr << "Error setting socket timeout" << std::endl;
 			close(client_socket);
 			return peer_list;
 		}
 
-		// Connect to peer
-		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+		// Connect to peer for asking peer list
+		cout << "connecting to peer: " << peer_port << endl;
 
+		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+			
+			//if connection fails
 			cerr << "Connection to peer failed query_peer_for_peers()\n";
+		
+		/*	
 			//1st step delete the peer from the peer list
 			for (auto it = peers.begin(); it != peers.end(); ++it) {
 				if (it->second.second == peer_port) { // Compare the port 
 					peers.erase(it);             // Erase the entry
-					cout << "Deleted peer with port: " << port << endl;
+					total_peers--;	//decrement total peers
+					cout << "Deleted peer with port: " << peer_port << endl;
+					cout << "returning " << endl;
+					list_changed = true;	//peer list has actually changed by deleting a node.
+					for(const auto& lala : peer_list) {
+						cout << lala.first << ", " << lala.second << endl;
+					}
 					return peer_list;                      // Exit after deletion
 				}	
+			}
+		*/
+
+			//1st step delete the non-active peer from the peer list.
+			for(auto it = peers.begin(); it != peers.end(); ) {
+				//erase condition
+				if(it->second.second == peer_port) {
+					it = peers.erase(it);
+					total_peers--;
+					list_changed = true;
+					cout << "Deleted peer with port: " << peer_port << endl;
+					cout << "returning " << endl;
+					for(const auto& lala : peer_list) {
+						cout << lala.first << ", " << lala.second << endl;
+
+					}
+					return peer_list;
+				} else {
+					++it;
+				}
 			}
 
 			close(client_socket); //close the socket.
@@ -437,7 +489,7 @@ private:
 				//	cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
 				{
-					//	lock_guard<mutex> lock(peer_list_mutex);
+						lock_guard<mutex> lock(peer_list_mutex);
 					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
