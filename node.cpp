@@ -790,7 +790,6 @@ private:
 			if (bytes_read <= 0) {
 				break;
 			}
-			//		cout << "Received: " << buffer << endl;
 
 			if (*my_port == bootstrap_port) { // Bootstrap node logic
 				string register_cmd = "REGISTER";
@@ -799,33 +798,40 @@ private:
 				int peer_node_port;
 				istringstream ss(buffer);
 				ss >> command >> peer_node_ip >> peer_node_port;
+				cout << "Received: " << buffer << endl;
 
 				if (command.compare(register_cmd) == 0) {
 					total_peers++;
 					peers[total_peers] = make_pair(peer_node_ip, peer_node_port);
-					//cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
+					cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
 					//print_backbone_nodes();
 					send_updated_peer_list(client_socket);
 				} else if(command.compare(disconnection_cmd) == 0) {
 					cout << "Received Disconnection Informing msg\n";
 					//should delete a peer from the peer list.
 					bool shouldDelete = false;
-					for(const auto& peer: peers) {
-						if(peer.second.second == peer_node_port) {
-							shouldDelete=true;
-							cout << "should delete" << endl;
-							break;
+					//lock
+					{		
+						lock_guard<mutex> lock(peer_list_mutex);
+						for(const auto& peer: peers) {
+							if(peer.second.second == peer_node_port) {
+								shouldDelete=true;
+								cout << "should delete" << endl;
+								break;
+							}
 						}
-					}
-					if(shouldDelete) {
-						for(auto it = peers.begin(); it != peers.end(); ) {
-							//erase condition
-							if(it->second.second == peer_node_port) {
-								it = peers.erase(it);
-								total_peers--;
-								cout << "Deleted peer with port: " << peer_node_port << endl << "nodes now: " << endl;
-
-								print_backbone_nodes();
+						cout << "cntd" << endl;	
+						if(shouldDelete) {
+							cout << "cntd & should del" << endl;	
+							for(auto it = peers.begin(); it != peers.end(); it++) {
+								cout << " found one! " << endl;
+								//erase condition
+								if(it->second.second == peer_node_port) {
+									it = peers.erase(it);
+									total_peers--;
+									cout << "Deleted peer with port: " << peer_node_port << endl << "nodes now: " << endl;
+									print_backbone_nodes();
+								}
 							}
 						}
 					}
