@@ -53,7 +53,12 @@ private:
 
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
+	
 
+	// BACKBONE NODES
+	// Function which iterates through peers
+	// and sends them the typed message
+	// from the calling peer.
 	void sendMessageToPeers(const string& content, int sender_port, map<int, int>& sender_clock) {
 		{
 			lock_guard<mutex> lock(clock_mutex);
@@ -165,8 +170,11 @@ private:
 	}
 
 	// BOOTSTRAP NODE operation
-	// sends to the connected node 2 other peers data(ip:port)
-	//
+	// Upon a peer registers to the bootstrap node,
+	// he sends to the connected node 2 other 
+	// peers data(ip:port)
+	// He can then find the remaining peers 
+	// by using the gossip protocol
 	void send_updated_peer_list(int client_socket) {
 		int count = 0;
 
@@ -197,7 +205,13 @@ private:
 
 	}
 
-	//BACKBONE NODES   starting the gossip thread.
+	// BACKBONE NODE
+	// starting the gossip thread.
+	// the thread supporting the 
+	// implemented gossip protocol
+	// Keeps track of how many times
+	// the peer list remained unchainged
+	// in order to allow user to send a message ( heartbeat variable)
 	void start_gossip_thread() {
 		thread([this]() {
 
@@ -205,7 +219,7 @@ private:
 			int heartbeat_counter = 0;
 
 			while (true) {
-				this_thread::sleep_for(chrono::milliseconds(400)); // Gossip every 500  millisecs
+				this_thread::sleep_for(chrono::milliseconds(300)); // Gossip every 500  millisecs
 				
 				//no reason to involve gossip, if we are alone.
 				if(total_peers == 1)
@@ -277,9 +291,19 @@ private:
 			}
 		}).detach();
 	}
+	
+	// BACKBONE NODE code. 
+	// Informing the bootstrap node, that a peer 
+	// using a specific port has been disconnected.
+	void inform_bootstrap_for_disconnected_node(int peer_port) {
 
 
-	//BACKBONE NODES gossiping query
+	}	
+
+	// BACKBONE NODES gossiping query
+	// A peer asks his peers to send him their peer lists. 
+	// If unable to connect to a peer, he is considered 
+	// and appropriate action takes place.
 	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
 		vector<pair<string, int>> peer_list;
 		int client_socket;
@@ -304,7 +328,7 @@ private:
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
-		timeout.tv_usec = 40000; // Timeout in microseconds (0.2ms)
+		timeout.tv_usec = 120000; // Timeout in microseconds (0.2ms)
 		
 		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
@@ -325,6 +349,7 @@ private:
 				//erase condition
 				//1st step delete the non-active peer from the peer list.
 				//2nd step delete entry from vector_clock.
+				//3rd step inform bootstrap node, for the disconnected node.
 				if(it->second.second == peer_port) {
 					it = peers.erase(it);
 					total_peers--;
@@ -340,6 +365,8 @@ private:
 							cout << lala.first << ", " << lala.second << endl;
 						}
 					}
+					
+					inform_bootstrap_for_disconnected_node(peer_port);		
 
 					return {}; //return empty vector to denote that deletion already occured.
 				} else {
@@ -423,7 +450,11 @@ private:
 	}
 
 
-	//BACKBONE nodes
+	// BACKBONE NODES
+	// Function which parses the received message 
+	// and takes appropriate action upon it. All 
+	// functionality of backbone nodes passes through
+	// this handling of messaging mechanism.
 	int handle_message(int client_socket, string buf, const string& sender_ip)
 	{
 		istringstream iss(buf);
@@ -593,7 +624,11 @@ private:
 		return 0;
 	}
 
-	// BACKBONE node operation
+	// BACKBONE NODE operation
+	// Function called to register a new peer
+	// against the bootstrap node. As a result
+	// bootstrap will reply sending the (ip:port)
+	// of 2 peers already in the system.
 	void register_to_bootstrap(void) {
 		string cmd = "REGISTER";
 		string my_reg = cmd + " " + node_ip + " " + to_string(port);
@@ -665,8 +700,10 @@ private:
 	}
 
 
-
-
+	
+	// BACKBONE NODES
+	// Debug function to print the registered 
+	// peers that a peer knows about in the system.
 	void print_backbone_nodes(void)
 	{
 		cout << "Registered peers: " << total_peers << endl;
@@ -675,6 +712,11 @@ private:
 
 	}
 
+
+	// Function whitch distinguishes functionality 
+	// upon a message received for backbone nodes 
+	// and bootstrap node. If message is for backbone 
+	// nodes(peers) handle_message() is called. 
 	void handleConnection(int client_socket) {
 		//	cout << "handleConnection() client_socket: " << client_socket << endl;
 
