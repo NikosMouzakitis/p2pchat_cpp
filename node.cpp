@@ -53,7 +53,7 @@ private:
 
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
-	
+
 
 	// BACKBONE NODES
 	// Function which iterates through peers
@@ -93,7 +93,7 @@ private:
 
 				// Connect to peer
 				if (connect(client_socket, (struct sockaddr*)&peer_address, sizeof(peer_address)) < 0) {
-			//		cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
+					//		cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
 					close(client_socket);
 					continue;
 				}
@@ -165,36 +165,42 @@ private:
 				isGreater = true;  // If clock1 doesn't have this port, clock2 is greater
 			}
 		}
-		
+
 		return isGreater && !isLesser;
 	}
 
 	// BOOTSTRAP NODE operation
 	// Upon a peer registers to the bootstrap node,
-	// he sends to the connected node 2 other 
+	// he sends to the connected node 2 other
 	// peers data(ip:port)
-	// He can then find the remaining peers 
+	// He can then find the remaining peers
 	// by using the gossip protocol
 	void send_updated_peer_list(int client_socket) {
 		int count = 0;
 
-		// Iterate over the registered peers
-		for (const auto& info_peer : peers) {
-			// Send the connecting peer's own info if it's the only peer
-			string update = "UPDATE " + info_peer.second.first + " " + to_string(info_peer.second.second) + " ";
-			ssize_t bytes_sent = send(client_socket, update.c_str(), update.length(), 0);
+		{
+			//lock in this scope peer mutex.
+			lock_guard<mutex> lock(peer_list_mutex);
 
-			if (bytes_sent == -1) {
-				cerr << "Failed to send update message to the connected node\n";
-				continue; // Retry for the next peer
-			}
+			// Iterate over the registered peers
+			for (const auto& info_peer : peers) {
+				// Send the connecting peer's own info if it's the only peer
+				string update = "UPDATE " + info_peer.second.first + " " + to_string(info_peer.second.second) + " ";
+				ssize_t bytes_sent = send(client_socket, update.c_str(), update.length(), 0);
 
-			cout << "Sent update message: " << update << endl;
-			count++;
-			if (count >= 2) { // Send at most two peers
-				break;
+				if (bytes_sent == -1) {
+					cerr << "Failed to send update message to the connected node\n";
+					continue; // Retry for the next peer
+				}
+
+				cout << "Sent update message: " << update << endl;
+				count++;
+				if (count >= 2) { // Send at most two peers
+					break;
+				}
 			}
 		}
+
 		//finish update msg
 		string update="UPDATEFIN";
 		ssize_t bytes_sent = send(client_socket, update.c_str(), update.length(), 0);
@@ -207,7 +213,7 @@ private:
 
 	// BACKBONE NODE
 	// starting the gossip thread.
-	// the thread supporting the 
+	// the thread supporting the
 	// implemented gossip protocol
 	// Keeps track of how many times
 	// the peer list remained unchainged
@@ -220,7 +226,7 @@ private:
 
 			while (true) {
 				this_thread::sleep_for(chrono::milliseconds(300)); // Gossip every 500  millisecs
-				
+
 				//no reason to involve gossip, if we are alone.
 				if(total_peers == 1)
 					continue;
@@ -228,16 +234,16 @@ private:
 				{
 					lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
-						
-					//	cout << "sgt: " << peer.second.second << endl;
-					//	print_backbone_nodes();
+
+						//	cout << "sgt: " << peer.second.second << endl;
+						//	print_backbone_nodes();
 
 						// Skip querying self
 						if (peer.second.second == port) continue;
 
 						// Query peer for its known peers
 
-						if(peer.second.second == 0) 
+						if(peer.second.second == 0)
 						{
 							continue;
 						}
@@ -246,8 +252,8 @@ private:
 						//if null vector returned continue, deletion happened on peer list
 						if(received_peers.empty()) {
 							break; //nothing to merge
-						}	
-						
+						}
+
 						// Merge received peers with local peers
 						for (const auto& received_peer : received_peers) {
 							bool found = false;
@@ -261,7 +267,7 @@ private:
 
 							//found new peer in the list
 							if (!found) {
-								//is this correct here? 
+								//is this correct here?
 								int new_peer_id = total_peers++;
 								peers[new_peer_id] = {received_peer.first, received_peer.second};
 								list_changed = true;
@@ -285,24 +291,70 @@ private:
 						cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
 				}
 
-				if(debug)	
+				if(debug)
 					print_backbone_nodes();
 
 			}
 		}).detach();
 	}
-	
-	// BACKBONE NODE code. 
-	// Informing the bootstrap node, that a peer 
+
+	// BACKBONE NODE code.
+	// Informing the bootstrap node, that a peer
 	// using a specific port has been disconnected.
-	void inform_bootstrap_for_disconnected_node(int peer_port) {
+	void inform_bootstrap_for_disconnected_node(string peer_ip,int peer_port) {
+		string cmd = "DISC";
+		string my_reg = cmd + " " + peer_ip + " " + to_string(peer_port);
 
+		cout << "Disconnection Informing to the Bootstrap node: " << my_reg << endl;
 
-	}	
+		string n_ip = "127.0.0.1";
+		int n_port = bootstrap_port;
+		int client_socket;
+		struct sockaddr_in server_address;
+
+		// Create socket
+		if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+			cerr << "Socket creation for bootstrap connection failed\n";
+			return;
+		}
+
+		server_address.sin_family = AF_INET;
+		server_address.sin_port = htons(n_port);
+
+		// Convert IP address to binary form
+		if (inet_pton(AF_INET, n_ip.c_str(), &server_address.sin_addr) <= 0) {
+			cerr << "Invalid bootstrap IP address\n";
+			return;
+		}
+
+		// Connect to node
+		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
+			cout << "Connection to bootstrap node failed\n";
+			close(client_socket);
+			return;
+		}
+
+		if(debug)
+			cout << "Connected to node at " << n_ip << ":" << n_port << endl;
+
+		while (true) {
+			// Send the registration message to bootstrap node
+			ssize_t bytes_sent = send(client_socket, my_reg.c_str(), my_reg.length(), 0);
+
+			if (bytes_sent == -1) {
+				cout << "Failed to send message to bootstrap node\n";
+				continue; // Retry
+			}
+			if(debug)
+				cout << "Sent Disconnection Informing message: " << my_reg << endl;
+			break;
+		}
+
+	}
 
 	// BACKBONE NODES gossiping query
-	// A peer asks his peers to send him their peer lists. 
-	// If unable to connect to a peer, he is considered 
+	// A peer asks his peers to send him their peer lists.
+	// If unable to connect to a peer, he is considered
 	// and appropriate action takes place.
 	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
 		vector<pair<string, int>> peer_list;
@@ -329,7 +381,7 @@ private:
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
 		timeout.tv_usec = 120000; // Timeout in microseconds (0.2ms)
-		
+
 		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
 			std::cerr << "Error setting socket timeout" << std::endl;
@@ -365,8 +417,8 @@ private:
 							cout << lala.first << ", " << lala.second << endl;
 						}
 					}
-					
-					inform_bootstrap_for_disconnected_node(peer_port);		
+
+					inform_bootstrap_for_disconnected_node(peer_ip, peer_port);
 
 					return {}; //return empty vector to denote that deletion already occured.
 				} else {
@@ -397,9 +449,9 @@ private:
 			}
 		} else if (bytes_received < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
-			// Timeout occurred
-			cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
-			} 
+				// Timeout occurred
+				cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
+			}
 		}
 		close(client_socket);
 		return peer_list;
@@ -428,31 +480,31 @@ private:
 			cout << "Queue is empty." << endl;
 			return;
 		}
-		
+
 		PeerMessage firstMessage = messageQueue.front(); //access the first message in the queue.
 		cout << "Message from " << firstMessage.sender_port << " - " << firstMessage.content << endl; //display
 		messageQueue.pop(); //remove the first message.
-/*
-//		queue<PeerMessage> tempQueue = messageQueue;  // Make a copy to preserve the original queue
-		while (!tempQueue.empty()) {
-			PeerMessage msg = tempQueue.front();
-			tempQueue.pop();
-			// Print details of the message
-			cout << "Message from " << msg.sender_ip << ":" << msg.sender_port
-			     << " - \"" << msg.content << "\" - Clock: ";
-			// Print the vector clock
-			for (const auto& [port, time] : msg.vector_clock) {
-				cout << port << ":" << time << " ";
-			}
-			cout << endl;
-		}
-		*/
+		/*
+		//		queue<PeerMessage> tempQueue = messageQueue;  // Make a copy to preserve the original queue
+				while (!tempQueue.empty()) {
+					PeerMessage msg = tempQueue.front();
+					tempQueue.pop();
+					// Print details of the message
+					cout << "Message from " << msg.sender_ip << ":" << msg.sender_port
+					     << " - \"" << msg.content << "\" - Clock: ";
+					// Print the vector clock
+					for (const auto& [port, time] : msg.vector_clock) {
+						cout << port << ":" << time << " ";
+					}
+					cout << endl;
+				}
+				*/
 	}
 
 
 	// BACKBONE NODES
-	// Function which parses the received message 
-	// and takes appropriate action upon it. All 
+	// Function which parses the received message
+	// and takes appropriate action upon it. All
 	// functionality of backbone nodes passes through
 	// this handling of messaging mechanism.
 	int handle_message(int client_socket, string buf, const string& sender_ip)
@@ -482,8 +534,8 @@ private:
 					}
 					//if we don't have already added this peer, add it on peers Map.
 					if(!portExists) {
-						
-						{	
+
+						{
 							//lock on accessing peers
 							lock_guard<mutex> lock(peer_list_mutex);
 							peers[total_peers] = {p_ip, stoi(p_port)}; // Store in the map
@@ -494,7 +546,7 @@ private:
 						}
 					}
 				}
-			//	printVectorClock();
+				//	printVectorClock();
 
 			} else if(word == "UPDATEFIN") {
 				if(debug)
@@ -510,7 +562,7 @@ private:
 				//	cout << "Received GOSSIP request from " << sender_ip << ":" <<  sender_port << endl;
 
 				{
-						lock_guard<mutex> lock(peer_list_mutex);
+					lock_guard<mutex> lock(peer_list_mutex);
 					for(const auto& peer: peers) {
 						if(peer.second.first == sender_ip && peer.second.second == sender_port) {
 							found=true;
@@ -549,11 +601,11 @@ private:
 				string port_str;
 				string content;
 				string clock_str;
-				
+
 
 				if(debug)
 					cout << "Received message!: ::: " << buf << endl;
-				
+
 				// Extract the port, message content, and vector clock
 				iss >> port_str;
 				getline(iss, content, '~');  // skiping the first '~'
@@ -564,7 +616,7 @@ private:
 
 				if(debug)
 					cout << "1received: " << port_str << " " << content << " " << clock_str << endl;
-				
+
 				// Parse the vector clock (comma-separated "port:time" for our format)
 				istringstream clock_stream(clock_str);
 				string clock_entry;
@@ -590,9 +642,9 @@ private:
 					}
 				}
 
-				debug = 1;	
+				debug = 1;
 				if(debug) {
-				// Debugging: Print the received vector clock
+					// Debugging: Print the received vector clock
 					std::cout << "Received Vector Clock: { ";
 					for (const auto& entry : received_clock) {
 						std::cout << entry.first << ": " << entry.second << ", ";
@@ -603,7 +655,7 @@ private:
 
 				//update our local vector clock for this peer.
 				vector_clock[sender_port]++;
-				//check if we should adjust clock for other peers as well. 
+				//check if we should adjust clock for other peers as well.
 				//this is the case where we have not sent anything and received next message etc.
 				if(vector_clock[*my_port] == received_clock[*my_port]) {
 					for (const auto& peer : peers) {
@@ -662,7 +714,7 @@ private:
 			close(client_socket);
 			return;
 		}
-		
+
 		if(debug)
 			cout << "Connected to node at " << n_ip << ":" << n_port << endl;
 
@@ -674,7 +726,7 @@ private:
 				cerr << "Failed to send message to bootstrap node\n";
 				continue; // Retry
 			}
-			if(debug)		
+			if(debug)
 				cout << "Sent registration message: " << my_reg << endl;
 			break;
 		}
@@ -700,9 +752,9 @@ private:
 	}
 
 
-	
+
 	// BACKBONE NODES
-	// Debug function to print the registered 
+	// Debug function to print the registered
 	// peers that a peer knows about in the system.
 	void print_backbone_nodes(void)
 	{
@@ -713,10 +765,10 @@ private:
 	}
 
 
-	// Function whitch distinguishes functionality 
-	// upon a message received for backbone nodes 
-	// and bootstrap node. If message is for backbone 
-	// nodes(peers) handle_message() is called. 
+	// Function whitch distinguishes functionality
+	// upon a message received for backbone nodes
+	// and bootstrap node. If message is for backbone
+	// nodes(peers) handle_message() is called.
 	void handleConnection(int client_socket) {
 		//	cout << "handleConnection() client_socket: " << client_socket << endl;
 
@@ -738,10 +790,11 @@ private:
 			if (bytes_read <= 0) {
 				break;
 			}
-	//		cout << "Received: " << buffer << endl;
+			//		cout << "Received: " << buffer << endl;
 
 			if (*my_port == bootstrap_port) { // Bootstrap node logic
 				string register_cmd = "REGISTER";
+				string disconnection_cmd = "DISC";
 				string command, peer_node_ip;
 				int peer_node_port;
 				istringstream ss(buffer);
@@ -753,8 +806,31 @@ private:
 					//cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
 					//print_backbone_nodes();
 					send_updated_peer_list(client_socket);
+				} else if(command.compare(disconnection_cmd) == 0) {
+					cout << "Received Disconnection Informing msg\n";
+					//should delete a peer from the peer list.
+					bool shouldDelete = false;
+					for(const auto& peer: peers) {
+						if(peer.second.second == peer_node_port) {
+							shouldDelete=true;
+							cout << "should delete" << endl;
+							break;
+						}
+					}
+					if(shouldDelete) {
+						for(auto it = peers.begin(); it != peers.end(); ) {
+							//erase condition
+							if(it->second.second == peer_node_port) {
+								it = peers.erase(it);
+								total_peers--;
+								cout << "Deleted peer with port: " << peer_node_port << endl << "nodes now: " << endl;
+
+								print_backbone_nodes();
+							}
+						}
+					}
 				} else {
-					cout << "Received non-REGISTER command\n";
+					cout << "Received non defined msg\n";
 					break;
 				}
 			} else { // peer nodes logic
@@ -797,8 +873,8 @@ private:
 				if(debug)
 					cout << "Message sent to peers: \"" << content << "\"\n";
 			} else {
-			//	cout << "Updating peers" << endl;
-			//	this_thread::sleep_for(chrono::seconds(1)); //wait 1second.
+				//	cout << "Updating peers" << endl;
+				//	this_thread::sleep_for(chrono::seconds(1)); //wait 1second.
 				char dump = 'x';
 			}
 		}
@@ -849,7 +925,7 @@ public:
 			cout << "Listen failed" << endl;
 			return -1;
 		}
-	
+
 		cout << "node running on port " << port << endl;
 
 		if(port == bootstrap_port)
