@@ -41,9 +41,10 @@ private:
 	string node_ip; //running instance's ip
 	int port;	//running instance's port
 	int total_peers;
+	int bs_index; //index of bootstrap node for adding-registering new nodes in the system
 	map <int, pair<string, int>> peers; //Map of peer sockets (ip,port)
-	int server_fd;
-	std::map <int, int> vector_clock; //vector clock used for ordering transactions.
+	int server_fd;  //server file descriptor
+	std::map <int, int> vector_clock; //vector clock used for ordering messages.
 	std::mutex  clock_mutex;  //mutex to hold when modifying vector clock.
 	std::mutex  gossip_reply_mutex;  //mutex to hold when replying to a gossip transmitter.
 	std::mutex  peer_list_mutex;  //mutex to hold when manipulating peer-lists.
@@ -802,7 +803,8 @@ private:
 
 				if (command.compare(register_cmd) == 0) {
 					total_peers++;
-					peers[total_peers] = make_pair(peer_node_ip, peer_node_port);
+					bs_index++;
+					peers[bs_index] = make_pair(peer_node_ip, peer_node_port);
 					cout << "Added backbone peer node: " << peer_node_ip << ":" << peer_node_port << endl;
 					//print_backbone_nodes();
 					send_updated_peer_list(client_socket);
@@ -839,6 +841,7 @@ private:
 					cout << "Received non defined msg\n";
 					break;
 				}
+				print_backbone_nodes();
 			} else { // peer nodes logic
 				handle_message(client_socket, buffer,sender_ip);
 			}
@@ -892,6 +895,7 @@ public:
 	Node(const string& ip,int port) : node_ip(ip), port(port) {
 		cout << "node() constructor port: " <<port<<endl;
 		total_peers = 0; //initalization on 0. Bootstrap node, increments on REGISTER command.
+		bs_index = 0; //initializaton of bootstrap's node index for adding-registering new peers on its list.
 		// backbone nodes, increment when receiving PeerInfo from Bootstrap node.
 	}
 
