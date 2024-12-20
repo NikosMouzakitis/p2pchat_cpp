@@ -315,7 +315,7 @@ private:
 		string cmd = "DISC";
 		string my_reg = cmd + " " + peer_ip + " " + to_string(peer_port);
 
-		cout << "Disconnection Informing to the Bootstrap node: " << my_reg << endl;
+	//	cout << "Disconnection Informing to the Bootstrap node: " << my_reg << endl;
 
 		string n_ip = "127.0.0.1";
 		int n_port = bootstrap_port;
@@ -363,7 +363,7 @@ private:
 	}
 
 	// BACKBONE NODES gossiping query
-	// A peer asks his peers to send him their peer lists.
+	// A peer asks his peer to send him his peer lists.
 	// If unable to connect to a peer, he is considered
 	// and appropriate action takes place.
 	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
@@ -390,7 +390,7 @@ private:
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
-		timeout.tv_usec = 240000; // Timeout in microseconds (0.2ms)
+		timeout.tv_usec = 400000; // Timeout in microseconds 
 
 		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
@@ -405,6 +405,8 @@ private:
 
 		if (connect(client_socket, (struct sockaddr*)&server_address, sizeof(server_address)) < 0) {
 			//if connection fails
+			
+		label_disconnection:
 			if(debug)
 				cout << "Connection to peer failed query_peer_for_peers()\n";
 			for(auto it = peers.begin(); it != peers.end(); ) {
@@ -460,6 +462,8 @@ private:
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
 				// Timeout occurred
 				cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
+				//here we should treat it as a disconnection.
+				goto label_disconnection;	//redirect in label_disconnection to handle the same way
 			}
 		}
 		close(client_socket);
@@ -890,8 +894,8 @@ private:
 				if(debug)
 					cout << "Message sent to peers: \"" << content << "\"\n";
 			} else {
-					cout << "Updating peers" << endl;
-					print_backbone_nodes();
+				//	cout << "Updating peers" << endl;
+				//	print_backbone_nodes();
 				//	this_thread::sleep_for(chrono::seconds(1)); //wait 1second.
 				char dump = 'x';
 
