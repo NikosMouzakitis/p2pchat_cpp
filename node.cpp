@@ -16,6 +16,7 @@
 #include <algorithm>
 
 using namespace std;
+
 int debug = 0; //1-debug 0-no debug
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
@@ -50,7 +51,7 @@ private:
 	std::mutex  peer_list_mutex;  //mutex to hold when manipulating peer-lists.
 	bool list_changed = false; //gossip list for peers
 	bool canSendMessages = false; //ability to send messages to other peers.
-	int DESIRED_HEARTBEATS = 4;
+	int DESIRED_HEARTBEATS = 3;
 
 	queue<PeerMessage> messageQueue; //holding incoming messages.
 
@@ -222,14 +223,22 @@ private:
 	void start_gossip_thread() {
 		thread([this]() {
 
-			this_thread::sleep_for(chrono::seconds(3)); // Gossip every 3 seconds
+			this_thread::sleep_for(chrono::seconds(3)); // small delay to communicate with bootstrap first.
 			int heartbeat_counter = 0;
 
+			int retrieved_port; //used for comparison of corner case.
+
 			while (true) {
-				this_thread::sleep_for(chrono::milliseconds(300)); // Gossip every 500  millisecs
+				this_thread::sleep_for(chrono::milliseconds(500)); // Gossip every 500  millisecs
+
+				if(!peers.empty()) {
+					auto it = peers.begin(); //iterator in first element
+					int key = it->first; //accessing its key.
+					retrieved_port = it->second.second; //access the port of the first peer in the peer list.
+				}
 
 				//no reason to involve gossip, if we are alone.
-				if(total_peers == 1)
+				if( (total_peers == 1) && retrieved_port == (*my_port) )
 					continue;
 				// Lock to access peers safely
 				{
@@ -240,7 +249,8 @@ private:
 						//	print_backbone_nodes();
 
 						// Skip querying self
-						if (peer.second.second == port) continue;
+						if (peer.second.second == port) 
+							continue;
 
 						// Query peer for its known peers
 
@@ -250,7 +260,7 @@ private:
 						}
 
 						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
-						//if null vector returned continue, deletion happened on peer list
+						//if null vector returned break, deletion happened on peer list
 						if(received_peers.empty()) {
 							break; //nothing to merge
 						}
@@ -259,8 +269,7 @@ private:
 						for (const auto& received_peer : received_peers) {
 							bool found = false;
 							for (const auto& existing_peer : peers) {
-								if (existing_peer.second.first == received_peer.first &&
-								                existing_peer.second.second == received_peer.second) {
+								if (existing_peer.second.first == received_peer.first && existing_peer.second.second == received_peer.second) {
 									found = true;
 									break;
 								}
@@ -381,7 +390,7 @@ private:
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
 		timeout.tv_sec = 0;  // Timeout in seconds
-		timeout.tv_usec = 120000; // Timeout in microseconds (0.2ms)
+		timeout.tv_usec = 240000; // Timeout in microseconds (0.2ms)
 
 		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
@@ -418,9 +427,7 @@ private:
 							cout << lala.first << ", " << lala.second << endl;
 						}
 					}
-
 					inform_bootstrap_for_disconnected_node(peer_ip, peer_port);
-
 					return {}; //return empty vector to denote that deletion already occured.
 				} else {
 					++it;
@@ -436,6 +443,7 @@ private:
 		string request = "GOSSIP "+ to_string(*my_port);
 		send(client_socket, request.c_str(), request.length(), 0);
 //		cout << "Sent " << request.c_str() << endl;
+
 		/*****************************************************/ //problem to receive here.
 		// Receive peer list
 		char buffer[1024] = {0};
@@ -882,9 +890,11 @@ private:
 				if(debug)
 					cout << "Message sent to peers: \"" << content << "\"\n";
 			} else {
-				//	cout << "Updating peers" << endl;
+					cout << "Updating peers" << endl;
+					print_backbone_nodes();
 				//	this_thread::sleep_for(chrono::seconds(1)); //wait 1second.
 				char dump = 'x';
+
 			}
 		}
 	}
@@ -914,12 +924,14 @@ public:
 		struct sockaddr_in address;
 		int addrlen = sizeof(address);
 
-
+		//socket in each node, responsible for listening and accepting new connections
+		//and handle appropriate.	
 		if( (server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
 			cout << "socket creation failed" << endl;
 			cout << "retval: " << server_fd << endl;
 			return -1;
 		}
+
 		address.sin_family = AF_INET;
 		address.sin_addr.s_addr = inet_addr(node_ip.c_str());
 		address.sin_port = htons(port);
@@ -969,10 +981,11 @@ int main(int argc, char *argv[])
 		cout << "Usage: " << argv[0] << " <port>" << endl;
 		return -1;
 	}
-
+	//get arguments for ip:port of running instance
 	string ip = argv[1];
 	int port = stoi(argv[2]);
 	my_port = (int *)malloc(sizeof(int));
+
 	if(my_port == NULL)
 	{
 		cout << "malloc failed" << endl;
@@ -986,7 +999,7 @@ int main(int argc, char *argv[])
 	//starting the node's operation
 	thread node_thread(&Node::start, &node);
 
-
+	//thread join
 	node_thread.join();
 
 	return (0);
