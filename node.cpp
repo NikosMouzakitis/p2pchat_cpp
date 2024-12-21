@@ -47,7 +47,7 @@ private:
 	int server_fd;  //server file descriptor
 	std::map <int, int> vector_clock; //vector clock used for ordering messages.
 	std::mutex  clock_mutex;  //mutex to hold when modifying vector clock.
-	std::mutex  gossip_reply_mutex;  //mutex to hold when replying to a gossip transmitter.
+	std::mutex  queue_mutex;  //mutex to hold when modifying the received message queue.
 	std::mutex  peer_list_mutex;  //mutex to hold when manipulating peer-lists.
 	bool list_changed = false; //gossip list for peers
 	bool canSendMessages = false; //ability to send messages to other peers.
@@ -127,6 +127,8 @@ private:
 
 	void enqueueMessage(PeerMessage newMessage) {
 		// Place the message in the queue
+			
+		std::lock_guard<std::mutex> lock(queue_mutex);
 
 		messageQueue.push(newMessage);
 
@@ -147,6 +149,7 @@ private:
 		for (const auto& msg : tempQueue) {
 			messageQueue.push(msg);
 		}
+
 	}
 	//study.
 	bool compareVectorClocks(const map<int, int>& clock1, const map<int, int>& clock2) {
@@ -230,7 +233,7 @@ private:
 
 			while (true) {
 				this_thread::sleep_for(chrono::milliseconds(500)); // Gossip every 500  millisecs
-
+				cout << "gossiparw" << endl;
 				if(!peers.empty()) {
 					auto it = peers.begin(); //iterator in first element
 					int key = it->first; //accessing its key.
@@ -245,17 +248,16 @@ private:
 					lock_guard<mutex> lock(peer_list_mutex);
 					for (const auto& peer : peers) {
 
-						//	cout << "sgt: " << peer.second.second << endl;
+							cout << "sgt: " << peer.second.second << endl;
 						//	print_backbone_nodes();
 
 						// Skip querying self
 						if (peer.second.second == port) 
 							continue;
-
-						// Query peer for its known peers
-
+						// 
 						if(peer.second.second == 0)
 						{
+							cout << "no port 0" << endl;
 							continue;
 						}
 
@@ -275,9 +277,8 @@ private:
 								}
 							}
 
-							//found new peer in the list
+							//found new peer in the list, registering him.
 							if (!found) {
-								//is this correct here?
 								int new_peer_id = total_peers++;
 								peers[new_peer_id] = {received_peer.first, received_peer.second};
 								list_changed = true;
@@ -285,20 +286,26 @@ private:
 						}
 					}
 				}
-
 				// Update heartbeat counter
 				if (list_changed) {
+					cout << "changed: " << endl;
 					heartbeat_counter = 0;
 					canSendMessages = false;
 					if(debug)
 						cout << "PEER LISE UPDATED! Known peers: " << peers.size() << endl;
 					list_changed = false; //set false again.
 				} else {
+
+					cout << "not changed: " << endl;
+					cout << "debug " << debug << endl;
 					heartbeat_counter++;
-					if(heartbeat_counter >= DESIRED_HEARTBEATS)
-						canSendMessages = true;
+
 					if(debug)
 						cout << "Peer list unchanged for " << heartbeat_counter << " heartbeats." << endl;
+
+					if(heartbeat_counter >= DESIRED_HEARTBEATS)
+						canSendMessages = true;
+
 				}
 
 				if(debug)
@@ -387,9 +394,10 @@ private:
 			return peer_list;
 		}
 
+		
 		// Setting the socket timeout for receiving data
 		struct timeval timeout;
-		timeout.tv_sec = 0;  // Timeout in seconds
+		timeout.tv_sec = 1;  // Timeout in seconds
 		timeout.tv_usec = 400000; // Timeout in microseconds 
 
 		//setting socket to timeout
@@ -398,7 +406,7 @@ private:
 			close(client_socket);
 			return peer_list;
 		}
-
+		
 		// Connect to peer for asking peer list
 		if(debug)
 			cout << "connecting to peer: " << peer_port << endl;
@@ -448,7 +456,7 @@ private:
 
 		/*****************************************************/ //problem to receive here.
 		// Receive peer list
-		char buffer[1024] = {0};
+		char buffer[1024] = {0}; //zero-ing buffer.
 		ssize_t bytes_received = recv(client_socket, buffer, sizeof(buffer) - 1, 0);
 		if (bytes_received > 0) {
 			buffer[bytes_received] = '\0'; // Null-terminate the received message
@@ -461,9 +469,9 @@ private:
 		} else if (bytes_received < 0) {
 			if (errno == EWOULDBLOCK || errno == EAGAIN) {
 				// Timeout occurred
-				cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
+			//	cerr << "Timeout occurred: No response from peer with port: " << peer_port << endl;
 				//here we should treat it as a disconnection.
-				goto label_disconnection;	//redirect in label_disconnection to handle the same way
+		//		goto label_disconnection;	//redirect in label_disconnection to handle the same way
 			}
 		}
 		close(client_socket);
@@ -487,7 +495,8 @@ private:
 	}
 
 	void printMessageQueue() {
-		lock_guard<mutex> lock(clock_mutex);  // Ensure thread safety
+		//lock_guard<mutex> lock(clock_mutex);  // Ensure thread safety
+		lock_guard<mutex> lock(queue_mutex);  // Ensure thread safety
 
 		if (messageQueue.empty()) {
 			cout << "Queue is empty." << endl;
@@ -655,7 +664,6 @@ private:
 					}
 				}
 
-				debug = 1;
 				if(debug) {
 					// Debugging: Print the received vector clock
 					std::cout << "Received Vector Clock: { ";
@@ -664,7 +672,6 @@ private:
 					}
 					std::cout << "}" << std::endl;
 				}
-				debug = 0;
 
 				//update our local vector clock for this peer.
 				vector_clock[sender_port]++;
@@ -681,7 +688,7 @@ private:
 
 				// Enqueue the message to be processed later
 				enqueueMessage(receivedMessage);
-				printMessageQueue();
+				//printMessageQueue();
 
 			}
 
@@ -963,7 +970,7 @@ public:
 		while(true) {
 			int client_socket = accept(server_fd, (struct sockaddr *) & address, (socklen_t*)&addrlen);
 			if(client_socket < 0) {
-				cout << "Accept failed" << endl;
+				cout << "Accept failed" << ":: (err " << strerror(errno) << " )" << endl;
 				continue; // just continue on failure.
 			}
 			//handle the new connection.
