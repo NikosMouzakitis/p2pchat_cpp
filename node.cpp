@@ -21,6 +21,37 @@ int debug = 0; //1-debug 0-no debug
 int *my_port;
 static int bootstrap_port = 8080; // port of the bootstrap node.
 
+
+
+
+//because of the many sockets creation, we create this wrapper for
+//closing automatic the sockets upon destruction(avoid socket leakage)
+class SocketGuard {
+    int fd;
+public:
+    explicit SocketGuard(int _fd = -1) : fd(_fd) {}
+    ~SocketGuard() { if(fd >= 0) close(fd); }
+    
+    // Prevent copying
+    SocketGuard(const SocketGuard&) = delete;
+    SocketGuard& operator=(const SocketGuard&) = delete;
+    
+    // Allow moving
+    SocketGuard(SocketGuard&& other) noexcept : fd(other.fd) { other.fd = -1; }
+    SocketGuard& operator=(SocketGuard&& other) noexcept {
+        if(this != &other) {
+            if(fd >= 0) close(fd);
+            fd = other.fd;
+            other.fd = -1;
+        }
+        return *this;
+    }
+    
+    // Accessor for raw fd when needed
+    operator int() const { return fd; }
+};
+
+//PeerMessage struct used for the messages.
 struct PeerMessage {
 	string content;
 	map<int, int> vector_clock;
@@ -39,9 +70,10 @@ struct PeerMessage {
 class Node {
 
 private:
+	SocketGuard server_socket_guard;
 	string node_ip; //running instance's ip
 	int port;	//running instance's port
-	int total_peers;
+	int total_peers; //total peers number.
 	int bs_index; //index of bootstrap node for adding-registering new nodes in the system
 	map <int, pair<string, int>> peers; //Map of peer sockets (ip,port)
 	int server_fd;  //server file descriptor
@@ -54,8 +86,6 @@ private:
 	int DESIRED_HEARTBEATS = 3;
 
 	queue<PeerMessage> messageQueue; //holding incoming messages.
-
-
 
 	// BACKBONE NODES
 	// Function which iterates through peers
@@ -74,48 +104,40 @@ private:
 		// Send the message to all peers except itself
 		for (const auto& peer : peers) {
 			if (peer.second.second != sender_port) { // Exclude self
-				int client_socket;
 				struct sockaddr_in peer_address;
-
-				// Create socket
-				if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-					cerr << "Socket creation failed for sending message to " << peer.second.first << ":" << peer.second.second << endl;
+				SocketGuard client_socket(socket(AF_INET,SOCK_STREAM, 0));
+				if (client_socket < 0) {
+			                cerr << "Socket creation failed for " << peer.second.first << endl;
 					continue;
 				}
-
 				peer_address.sin_family = AF_INET;
 				peer_address.sin_port = htons(peer.second.second);
 
 				// Convert IP address to binary form
 				if (inet_pton(AF_INET, peer.second.first.c_str(), &peer_address.sin_addr) <= 0) {
 					cerr << "Invalid peer IP address: " << peer.second.first << endl;
-					close(client_socket);
 					continue;
 				}
 
-				// Connect to peer
-				if (connect(client_socket, (struct sockaddr*)&peer_address, sizeof(peer_address)) < 0) {
-					//		cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
-					close(client_socket);
+				// Connect to selected peer
+				if (connect(static_cast<int>(client_socket), (struct sockaddr*)&peer_address, sizeof(peer_address)) < 0) {
+			//		cerr << "Connection to peer " << peer.second.first << ":" << peer.second.second << " failed\n";
 					continue;
 				}
 
 				// Send the message
-				ssize_t bytes_sent = send(client_socket, message.c_str(), message.length(), 0);
+				ssize_t bytes_sent = send(static_cast<int>(client_socket), message.c_str(), message.length(), 0);
 				if (bytes_sent == -1) {
 					cerr << "Failed to send message to peer " << peer.second.first << ":" << peer.second.second << endl;
 				} else {
 					if(debug)
 						cout << "Message sent to peer " << peer.second.first << ":" << peer.second.second << endl;
 				}
-
-				close(client_socket);
 			}
 		}
 	}
 
-
-
+	//format the vector clock as a string of "port:value, port:value, " etc.
 	string formatVectorClock(map<int, int>& vector_clock) {
 		// Format the vector clock as a string (e.g., "1:2, 2:3")
 		stringstream ss;
@@ -125,55 +147,54 @@ private:
 		return ss.str();
 	}
 
-	void enqueueMessage(PeerMessage newMessage) {
-		// Place the message in the queue
-			
-		std::lock_guard<std::mutex> lock(queue_mutex);
 
+	void enqueueMessage(PeerMessage newMessage) {
+		std::lock_guard<std::mutex> lock(queue_mutex);
+		
+
+		//push message in queue
 		messageQueue.push(newMessage);
 
-		// Sort messages in the queue based on vector clock
-		// In a real application, you'd likely implement a priority queue or use custom sorting
+		// Transfer all messages in the temp queue
 		vector<PeerMessage> tempQueue;
 		while (!messageQueue.empty()) {
 			tempQueue.push_back(messageQueue.front());
 			messageQueue.pop();
 		}
+		
 
 		// Sort the queue by vector clock comparison
 		sort(tempQueue.begin(), tempQueue.end(), [this](PeerMessage& a, PeerMessage& b) {
-			return compareVectorClocks(a.vector_clock, b.vector_clock);
+			return isCausallyBefore(a.vector_clock, b.vector_clock);
 		});
 
-		// Refill the queue
+		// Refill the original queue, so in the end we have ordered queue by casual order on messageQueue.
 		for (const auto& msg : tempQueue) {
 			messageQueue.push(msg);
 		}
-
 	}
-	//study.
-	bool compareVectorClocks(const map<int, int>& clock1, const map<int, int>& clock2) {
-		bool isGreater = false;
-		bool isLesser = false;
+	
 
-		for (const auto& [port, time] : clock1) {
-			if (clock2.find(port) != clock2.end()) {  // Correct use of find()
-				if (clock2.at(port) > time) isGreater = true;
-				if (clock2.at(port) < time) isLesser = true;
-			} else {
-				isLesser = true;  // If clock2 doesn't have this port, it's less than
+	//tells if first argument clock, is casually before the second one.
+	bool isCausallyBefore(const map<int, int>& a, const map<int, int>& b) {
+	// Check if all entries in 'a' are less than or equal to those in 'b'
+		for (const auto& [k, v] : a) {
+		// If 'b' doesn't have the key, treat it as 0
+			if (v > (b.count(k) ? b.at(k) : 0)) {
+				return false;
 			}
 		}
 
-		for (const auto& [port, time] : clock2) {
-			if (clock1.find(port) == clock1.end()) {  // Correct use of find()
-				isGreater = true;  // If clock1 doesn't have this port, clock2 is greater
+		// Additionally, check if at least one entry in 'a' is strictly less than in 'b'
+		for (const auto& [k, v] : b) {
+		// If 'a' doesn't have the key, treat it as 0
+			if ((a.count(k) ? a.at(k) : 0) < v) {
+				return true;
 			}
 		}
-
-		return isGreater && !isLesser;
+		// If all entries are equal, they are not causally before
+		return false;
 	}
-
 	// BOOTSTRAP NODE operation
 	// Upon a peer registers to the bootstrap node,
 	// he sends to the connected node 2 other
@@ -200,7 +221,7 @@ private:
 
 				cout << "Sent update message: " << update << endl;
 				count++;
-				if (count >= 2) { // Send at most two peers
+				if (count >= 2) { // Send at most two peers 
 					break;
 				}
 			}
@@ -232,8 +253,11 @@ private:
 			int retrieved_port; //used for comparison of corner case.
 
 			while (true) {
+				//gossip periodicity
 				this_thread::sleep_for(chrono::milliseconds(500)); // Gossip every 500  millisecs
-				cout << "gossiparw" << endl;
+				//cout << "gossiparw" << endl;
+		
+				//for checking if we alone.
 				if(!peers.empty()) {
 					auto it = peers.begin(); //iterator in first element
 					int key = it->first; //accessing its key.
@@ -246,21 +270,22 @@ private:
 				// Lock to access peers safely
 				{
 					lock_guard<mutex> lock(peer_list_mutex);
+					//iterate all peers
 					for (const auto& peer : peers) {
 
-							cout << "sgt: " << peer.second.second << endl;
+						//	cout << "sgt: " << peer.second.second << endl;
 						//	print_backbone_nodes();
 
 						// Skip querying self
 						if (peer.second.second == port) 
 							continue;
-						// 
+						// not possible
 						if(peer.second.second == 0)
 						{
 							cout << "no port 0" << endl;
 							continue;
 						}
-
+						//do GOSSIP actually to the selected peer. send message and get reply
 						vector<pair<string, int>> received_peers = query_peer_for_peers(peer.second.first, peer.second.second);
 						//if null vector returned break, deletion happened on peer list
 						if(received_peers.empty()) {
@@ -288,7 +313,7 @@ private:
 				}
 				// Update heartbeat counter
 				if (list_changed) {
-					cout << "changed: " << endl;
+		//			cout << "changed: " << endl;
 					heartbeat_counter = 0;
 					canSendMessages = false;
 					if(debug)
@@ -296,8 +321,8 @@ private:
 					list_changed = false; //set false again.
 				} else {
 
-					cout << "not changed: " << endl;
-					cout << "debug " << debug << endl;
+			//		cout << "not changed: " << endl;
+			//		cout << "debug " << debug << endl;
 					heartbeat_counter++;
 
 					if(debug)
@@ -375,11 +400,10 @@ private:
 	// and appropriate action takes place.
 	vector<pair<string, int>> query_peer_for_peers(const string& peer_ip, int peer_port) {
 		vector<pair<string, int>> peer_list;
-		int client_socket;
 		struct sockaddr_in server_address;
-
+		SocketGuard client_socket(socket(AF_INET,SOCK_STREAM,0));
 		// Create socket
-		if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+		if ((client_socket < 0)) {
 			cerr << "Socket creation failed for peer query\n";
 			return peer_list;
 		}
@@ -390,7 +414,6 @@ private:
 		// Convert IP address to binary form
 		if (inet_pton(AF_INET, peer_ip.c_str(), &server_address.sin_addr) <= 0) {
 			cerr << "Invalid peer IP address\n";
-			close(client_socket);
 			return peer_list;
 		}
 
@@ -403,7 +426,6 @@ private:
 		//setting socket to timeout
 		if (setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
 			std::cerr << "Error setting socket timeout" << std::endl;
-			close(client_socket);
 			return peer_list;
 		}
 		
@@ -444,7 +466,6 @@ private:
 				}
 			}
 
-			close(client_socket); //close the socket.
 			cout << "closed client socket " << endl;
 			return peer_list;
 		}
@@ -493,7 +514,8 @@ private:
 		}
 		std::cout << "}" << std::endl;
 	}
-
+	
+	//display messaging on peers
 	void printMessageQueue() {
 		//lock_guard<mutex> lock(clock_mutex);  // Ensure thread safety
 		lock_guard<mutex> lock(queue_mutex);  // Ensure thread safety
@@ -618,7 +640,7 @@ private:
 				send(client_socket, peer_list.c_str(), peer_list.length(), 0);
 
 			} else if (word == "MESSAGE") {
-
+				//new message arrived.
 				// Handle MESSAGE with vector clock
 				string port_str;
 				string content;
@@ -673,7 +695,7 @@ private:
 					std::cout << "}" << std::endl;
 				}
 
-				//update our local vector clock for this peer.
+				//update our local vector clock for this peer.///increment as protocol suggests
 				vector_clock[sender_port]++;
 				//check if we should adjust clock for other peers as well.
 				//this is the case where we have not sent anything and received next message etc.
@@ -688,7 +710,8 @@ private:
 
 				// Enqueue the message to be processed later
 				enqueueMessage(receivedMessage);
-				//printMessageQueue();
+				//print it.
+				printMessageQueue();
 
 			}
 
@@ -801,10 +824,13 @@ private:
 			close(client_socket);
 			return;
 		}
+		//take sender's ip
 		string sender_ip = inet_ntoa(peer_address.sin_addr);
 
 
 		while (true) {
+
+			//prepare to read, zeroing buffer.
 			memset(buffer, 0, sizeof(buffer));
 			int bytes_read = read(client_socket, buffer, 1024);
 			if (bytes_read <= 0) {
@@ -868,7 +894,7 @@ private:
 		close(client_socket); // Ensure the socket is closed properly
 	}
 
-	// Function to handle user input and send it to peers
+	// Thread for handling user input and send it to peers
 	void chatInputThread() {
 
 		bool isOk=false;
@@ -912,6 +938,10 @@ private:
 
 
 public:
+	//used to do some Gtest on vector clocks.
+	const std::map<int, int>& getVectorClock() const {
+		return vector_clock;
+	}
 	//constructor
 	Node(const string& ip,int port) : node_ip(ip), port(port) {
 		cout << "node() constructor port: " <<port<<endl;
@@ -919,7 +949,8 @@ public:
 		bs_index = 0; //initializaton of bootstrap's node index for adding-registering new peers on its list.
 		// backbone nodes, increment when receiving PeerInfo from Bootstrap node.
 	}
-
+		
+	//general nodes operation.
 	int start()
 	{
 
@@ -927,7 +958,7 @@ public:
 			register_to_bootstrap();
 			start_gossip_thread(); //start the gossip thread.
 
-			//starting the chat thread.
+			//starting the chat thread.-to get input from the keyboard.
 			thread chatThread(&Node::chatInputThread, this);
 			chatThread.detach();
 		}
@@ -937,24 +968,25 @@ public:
 
 		//socket in each node, responsible for listening and accepting new connections
 		//and handle appropriate.	
-		if( (server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+		int raw_fd = socket(AF_INET,SOCK_STREAM, 0);
+		server_socket_guard = SocketGuard(raw_fd); //transfer the ownership on SocketGuard.
+		if( (server_socket_guard < 0)) {
 			cout << "socket creation failed" << endl;
-			cout << "retval: " << server_fd << endl;
 			return -1;
 		}
-
 		address.sin_family = AF_INET;
 		address.sin_addr.s_addr = inet_addr(node_ip.c_str());
 		address.sin_port = htons(port);
 
 		//bind socket
-		if( bind(server_fd, (struct sockaddr *) &address, sizeof(address)) < 0) {
+		//use static_cast because bind works on raw fds not on wrappers.
+		if( bind(static_cast<int>(server_socket_guard), (struct sockaddr *) &address, sizeof(address)) < 0) {
 			cout << "bind failed" << endl;
 			return -1;
 		}
 
 		//listen
-		if(listen(server_fd, 10) < 0) {
+		if(listen(static_cast<int>(server_socket_guard), 10) < 0) {
 			cout << "Listen failed" << endl;
 			return -1;
 		}
@@ -968,7 +1000,7 @@ public:
 
 		//accept connections
 		while(true) {
-			int client_socket = accept(server_fd, (struct sockaddr *) & address, (socklen_t*)&addrlen);
+			int client_socket = accept(static_cast<int>(server_socket_guard), (struct sockaddr *) & address, (socklen_t*)&addrlen);
 			if(client_socket < 0) {
 				cout << "Accept failed" << ":: (err " << strerror(errno) << " )" << endl;
 				continue; // just continue on failure.
@@ -982,7 +1014,6 @@ public:
 		}
 		cout << "never here" << endl;
 	}
-
 };
 
 int main(int argc, char *argv[])
@@ -995,11 +1026,12 @@ int main(int argc, char *argv[])
 	//get arguments for ip:port of running instance
 	string ip = argv[1];
 	int port = stoi(argv[2]);
-	my_port = (int *)malloc(sizeof(int));
+	//my_port = (int *)malloc(sizeof(int));
+	my_port = new int(port);
 
 	if(my_port == NULL)
 	{
-		cout << "malloc failed" << endl;
+		cout << "new port failed" << endl;
 		return -1;
 	}
 	*my_port = port;
@@ -1012,6 +1044,6 @@ int main(int argc, char *argv[])
 
 	//thread join
 	node_thread.join();
-
+	delete my_port; // free memory
 	return (0);
 }
